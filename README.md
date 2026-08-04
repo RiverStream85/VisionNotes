@@ -1,5 +1,9 @@
 # Vision Notes
 
+<p align="center">
+  <img src="VisionNotes/Resources/Assets.xcassets/AppIcon.appiconset/VisionNotesAppIcon.png" alt="Vision Notes logo: a green V formed from folded note pages" width="180">
+</p>
+
 Vision Notes is an iOS notebook for scanning, recognizing, searching, and exporting notes. Its ordinary Library/Import workflow uses Apple Vision entirely on the device. The optional Academic workflow improves mathematical notes with cloud vision models and creates editable Markdown and LaTeX plus a navigable semantic PDF.
 
 ## Features

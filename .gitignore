@@ -1,0 +1,19 @@
+# Local secrets and private notes
+VisionNotes/Resources/ProviderKeys.plist
+*.private.md
+.env
+.env.*
+!.env.example
+*.local.plist
+
+# Xcode and build output
+DerivedData/
+build/
+.build/
+*.xcuserstate
+xcuserdata/
+**/xcuserdata/
+
+# macOS metadata
+.DS_Store
+**/.DS_Store

@@ -1,6 +1,6 @@
 # Vision Notes Academic OCR
 
-The Academic tab converts photographed mathematical notes into editable Markdown and LaTeX source, an offline standalone HTML document, a searchable semantic PDF with heading-based navigation, a source-page facsimile, provider evidence JSON, extracted figures, and an artifact ZIP.
+The Academic tab converts photographed mathematical notes into editable Markdown and LaTeX source, an offline standalone HTML document, a searchable semantic PDF with a conditional in-document Contents section when Markdown headings are present, a source-page facsimile, provider evidence JSON, extracted figures, and an artifact ZIP.
 
 ## Local key setup
 
@@ -22,9 +22,9 @@ Delete and Delete All remove local source pages, evidence, edits, and deliverabl
 
 ## Rendering
 
-The semantic PDF is generated on device by a restricted local HTML document in `WKWebView`. Math is converted to MathML without a CDN or remote font/script dependency. Headings are assigned stable anchors so the generated table of contents can jump to sections.
+The semantic PDF is generated on device by a restricted local HTML document in `WKWebView`. Math is converted to MathML without a CDN or remote font/script dependency. Markdown `#` through `####` headings are assigned stable HTML anchors. When at least one such heading exists, the renderer inserts an in-document Contents block; documents without Markdown headings omit it. The standalone HTML links to those anchors. The app does not currently create a native PDF outline or bookmark tree, and WebKit may not preserve HTML anchor links as native PDF link annotations on every iOS version.
 
-The generated `document.tex` is human-readable, Unicode/CJK-aware XeLaTeX-compatible source. The app does not claim that XeLaTeX produced `document.pdf`; its current semantic PDF renderer is WebKit. The renderer protocol leaves room for a proven App-Store-compatible native TeX engine later.
+The generated `document.tex` is human-readable, Unicode/CJK-aware XeLaTeX-compatible source and always includes `\tableofcontents`. The app does not claim that XeLaTeX produced `document.pdf`; its current semantic PDF renderer is WebKit. The renderer protocol leaves room for a proven App-Store-compatible native TeX engine later.
 
 The standalone HTML embeds figures as data URLs and uses a restrictive Content Security Policy. The facsimile PDF is independently generated from immutable normalized source pages and remains the photographed-layout reference.
 

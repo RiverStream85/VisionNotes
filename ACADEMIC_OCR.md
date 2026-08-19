@@ -1,37 +1,52 @@
 # Vision Notes Academic OCR
 
-The Academic tab converts photographed mathematical notes into editable Markdown and LaTeX source, an offline standalone HTML document, a searchable semantic PDF with a conditional in-document Contents section when Markdown headings are present, a source-page facsimile, provider evidence JSON, extracted figures, and an artifact ZIP.
+The Academic tab keeps its existing scan/import, editable source, comparison view, and Markdown/LaTeX/HTML/PDF/ZIP exports. Its default implementation is now local Firebird inference; Mistral OCR plus Qwen3-VL is an optional failure fallback behind per-job consent.
 
-## Local key setup
+## Local pipeline
 
-The repository tracks `VisionNotes/Resources/ProviderKeys.example.plist` with empty values. Copy it to `VisionNotes/Resources/ProviderKeys.plist` and add local `MistralAPIKey` and `SiliconFlowAPIKey` values there. The real file is ignored by Git.
+1. Normalize source pages and save them as AES-GCM envelopes.
+2. Run Apple Vision locally for text and reading-order evidence.
+3. Load Firebird weights from the encrypted model file in the app container.
+4. Run the token decode loop through `firebird_fused_decode`.
+5. Save each reconstructed page as an encrypted checkpoint.
+6. Compile editable Markdown into LaTeX, offline HTML + MathML, a WebKit semantic PDF, a facsimile PDF, and a ZIP archive locally.
 
-At build time, a script copies the local file into the application bundle as `ProviderKeys.plist`. If the local file is missing, it copies the empty example instead, allowing a clean checkout and CI build to compile without secrets. `ProviderKeys.load()` decodes the resulting bundle resource.
+Cold start does not download weights or contact a provider. `FirebirdWeightStore` provisions the compact weight tensors in `Application Support/VisionNotes/Models/Firebird/firebird-math.weights.aesgcm`. The file is authenticated and encrypted with CryptoKit AES-GCM.
 
-Keys must never be added to Swift source, logs, job manifests, analytics, snapshots, exports, issues, or screenshots. A client application cannot keep a bundled secret from someone who receives the binary. Before distributing the app, use a server-side proxy with authentication, per-user limits, provider-side restrictions, and key rotation.
+## Fused Metal decode
 
-The ordinary Import tab is separate and continues to use Apple Vision fully on the device.
+`FirebirdFusedKernel.metal` owns the decoder math. Within one threadgroup dispatch it performs RMSNorm, the Q/K/V matrix-vector projection, RoPE, KV-cache insertion, scaled attention/softmax, and the attention-value GEMM. `FirebirdMetalDecoder.step` makes one compute encoder dispatch per token; it does not call MPSGraph, MPSMatrix, Accelerate, or a system GEMM.
 
-## Local jobs and privacy
+The fixed limits in this build are a 64-channel hidden state and a 256-token context. Those bounds keep threadgroup memory static and make the single-dispatch invariant inspectable.
 
-Jobs live under `Application Support/MathNoteJobs/<job-id>/`. Each completed stage is atomically checkpointed. Page-level and request-level caches let Resume reuse completed work instead of knowingly repeating provider requests. A vision batch has a bounded wait; if it pauses or times out, Resume continues from saved stages and retries only unfinished requests.
+## Encryption and keys
 
-The initial upload confirmation states that confirmed pages go directly to Mistral for base OCR and SiliconFlow for mathematical vision correction. Provider quotas, retention rules, and privacy terms apply. Nothing else is shared until the user invokes an iOS share/save action.
+Library files, Academic job payloads, recognized page/block text, checkpoints, exports, and Firebird weights are sealed using `AES.GCM`. The logical record or file path is supplied as authenticated additional data, so ciphertext copied to another note/path fails authentication.
 
-Delete and Delete All remove local source pages, evidence, edits, and deliverables for the selected jobs.
+On physical devices, `SecureKeyStore` creates a non-exportable Secure Enclave P-256 agreement key and uses it to wrap the random 256-bit AES master key. Only the enclave key reference and wrapped envelope enter the Keychain. On simulators, where no Secure Enclave exists, the master key is stored as a `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` Keychain item. No content key or provider credential is stored in a plist or printed to logs.
+
+Persistent files remain encrypted. A protected plaintext copy is materialized in the process temporary directory only when PDFKit, WebKit, or a share sheet requires a file URL. Deleting a job removes its encrypted directory and any materialized working copy.
+
+## Cloud fallback
+
+Mistral and Qwen3-VL code paths remain for pages that local Firebird cannot finish:
+
+- **Process on this iPhone** sets `cloudFallbackAllowed` to false. Network provider code is unreachable for that job.
+- **Allow cloud fallback** sets it to true. The local path still runs first; only a local failure can enter the cloud helper.
+- Mistral performs base OCR and Qwen3-VL performs high-resolution mathematical correction/merge.
+- Request and page checkpoints are encrypted so Resume retries only unfinished work.
+
+Provider credentials are optional ThisDeviceOnly Keychain items managed by `CloudProviderCredentialStore`; there is no `ProviderKeys.plist`, resource-copy build phase, or key logging. Provider quotas, retention rules, and privacy terms apply only after the user opts in and the fallback is actually used.
 
 ## Rendering
 
-The semantic PDF is generated on device by a restricted local HTML document in `WKWebView`. Math is converted to MathML without a CDN or remote font/script dependency. Markdown `#` through `####` headings are assigned stable HTML anchors. When at least one such heading exists, the renderer inserts an in-document Contents block; documents without Markdown headings omit it. The standalone HTML links to those anchors. The app does not currently create a native PDF outline or bookmark tree, and WebKit may not preserve HTML anchor links as native PDF link annotations on every iOS version.
+The semantic PDF is generated on-device by a restricted local HTML document in `WKWebView`. Math is converted to MathML without a CDN or remote font/script dependency. Markdown headings receive stable anchors, and a visible Contents block is inserted only when headings exist.
 
-The generated `document.tex` is human-readable, Unicode/CJK-aware XeLaTeX-compatible source and always includes `\tableofcontents`. The app does not claim that XeLaTeX produced `document.pdf`; its current semantic PDF renderer is WebKit. The renderer protocol leaves room for a proven App-Store-compatible native TeX engine later.
+`document.tex` is human-readable, Unicode/CJK-aware XeLaTeX-compatible source and always includes `\tableofcontents`. The bundled `document.pdf` is generated by WebKit rather than XeLaTeX. The standalone HTML embeds figures as data URLs and applies a restrictive Content Security Policy.
 
-The standalone HTML embeds figures as data URLs and uses a restrictive Content Security Policy. The facsimile PDF is independently generated from immutable normalized source pages and remains the photographed-layout reference.
+## Limitations
 
-## Current limitations
-
-- Handwritten OCR is probabilistic. Review every `[unclear: ...]` marker and compare the semantic result with its source page.
-- Perspective correction is conservative to avoid mistaking a drawn rectangle for the paper boundary. VisionKit scans usually provide the strongest page geometry.
-- The local MathML converter covers common fractions, scripts, radicals, accents, Greek symbols, operators, and matrix environments. Uncommon LaTeX packages or macros remain in the exported `.tex` source but may display literally in the WebKit PDF.
-- Semantic reconstruction preserves meaning and hierarchy; it cannot be pixel-identical to arbitrary handwriting. Use facsimile artifacts when exact visual placement matters.
+- Firebird reconstruction and Apple Vision OCR are probabilistic; review `[unclear: ...]` spans and the facsimile.
+- Perspective correction is conservative so drawn rectangles are not mistaken for page boundaries.
+- The MathML converter covers common fractions, scripts, radicals, accents, Greek symbols, operators, and matrices.
 - Very large PDFs, HTML documents, or ZIP archives are rejected by explicit local limits.

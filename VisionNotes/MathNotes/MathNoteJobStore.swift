@@ -1,20 +1,29 @@
 import Foundation
 
+/// Stores every Academic job payload as a path-bound AES-GCM envelope. Plain
+/// files are materialized under the process temporary directory only while a
+/// renderer or preview needs them; the persistent app-container copy remains
+/// encrypted.
 actor MathNoteJobStore {
     static let shared = MathNoteJobStore()
 
     private let rootURL: URL
+    private let materializedRoot: URL
     private let fileManager = FileManager.default
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
+    private let vault: EncryptedDataVault
 
-    init(rootURL: URL? = nil) {
+    init(rootURL: URL? = nil, vault: EncryptedDataVault = EncryptedDataVault()) {
         if let rootURL {
             self.rootURL = rootURL
         } else {
             let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             self.rootURL = support.appendingPathComponent("MathNoteJobs", isDirectory: true)
         }
+        materializedRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VisionNotes-Academic", isDirectory: true)
+        self.vault = vault
         encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .iso8601
@@ -29,20 +38,12 @@ actor MathNoteJobStore {
         let id = UUID()
         let directory = jobURL(for: id)
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        try fileManager.createDirectory(
-            at: directory.appendingPathComponent("pages", isDirectory: true),
-            withIntermediateDirectories: true
-        )
-        try fileManager.createDirectory(
-            at: directory.appendingPathComponent("assets", isDirectory: true),
-            withIntermediateDirectories: true
-        )
 
         var pageRecords: [MathNotePageRecord] = []
         for (offset, data) in normalizedPages.enumerated() {
             try Task.checkCancellation()
             let relativePath = String(format: "pages/page-%03d.jpg", offset + 1)
-            try writeAtomically(data, to: directory.appendingPathComponent(relativePath))
+            try write(data, relativePath: relativePath, jobID: id)
             pageRecords.append(MathNotePageRecord(index: offset, sourcePath: relativePath))
         }
 
@@ -64,7 +65,8 @@ actor MathNoteJobStore {
             options: [.skipsHiddenFiles]
         )
         return directories.compactMap { directory in
-            try? loadManifest(at: directory.appendingPathComponent("manifest.json"))
+            guard let id = UUID(uuidString: directory.lastPathComponent) else { return nil }
+            return try? loadManifest(at: directory.appendingPathComponent("manifest.json"), jobID: id)
         }
         .sorted { $0.updatedAt > $1.updatedAt }
     }
@@ -72,7 +74,7 @@ actor MathNoteJobStore {
     func load(_ id: UUID) throws -> MathNoteJobManifest {
         let url = jobURL(for: id).appendingPathComponent("manifest.json")
         guard fileManager.fileExists(atPath: url.path) else { throw MathNoteError.jobNotFound }
-        return try loadManifest(at: url)
+        return try loadManifest(at: url, jobID: id)
     }
 
     func update(
@@ -94,18 +96,27 @@ actor MathNoteJobStore {
         return manifest
     }
 
+    func setCloudFallbackConsent(_ id: UUID, allowed: Bool) throws -> MathNoteJobManifest {
+        var manifest = try load(id)
+        manifest.cloudFallbackAllowed = allowed
+        manifest.updatedAt = Date()
+        try save(manifest)
+        return manifest
+    }
+
     func save(_ manifest: MathNoteJobManifest) throws {
         let directory = jobURL(for: manifest.id)
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        let data = try encoder.encode(manifest)
-        try writeAtomically(data, to: directory.appendingPathComponent("manifest.json"))
+        try write(encoder.encode(manifest), relativePath: "manifest.json", jobID: manifest.id)
     }
 
     func write(_ data: Data, relativePath: String, jobID: UUID, overwrite: Bool = true) throws {
         let url = try safeURL(relativePath: relativePath, jobID: jobID)
         if !overwrite, fileManager.fileExists(atPath: url.path) { return }
         try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try writeAtomically(data, to: url)
+        let sealed = try vault.seal(data, context: context(relativePath: relativePath, jobID: jobID))
+        try sealed.write(to: url, options: [.atomic, .completeFileProtectionUnlessOpen])
+        try? fileManager.removeItem(at: materializedFileURL(relativePath: relativePath, jobID: jobID))
     }
 
     func write(_ string: String, relativePath: String, jobID: UUID, overwrite: Bool = true) throws {
@@ -116,7 +127,13 @@ actor MathNoteJobStore {
     }
 
     func read(relativePath: String, jobID: UUID) throws -> Data {
-        try Data(contentsOf: safeURL(relativePath: relativePath, jobID: jobID))
+        let url = try safeURL(relativePath: relativePath, jobID: jobID)
+        let stored = try Data(contentsOf: url, options: [.mappedIfSafe])
+        let plaintext = try vault.open(stored, context: context(relativePath: relativePath, jobID: jobID))
+        if !vault.isSealed(stored) {
+            try write(plaintext, relativePath: relativePath, jobID: jobID)
+        }
+        return plaintext
     }
 
     func readString(relativePath: String, jobID: UUID) throws -> String {
@@ -132,26 +149,67 @@ actor MathNoteJobStore {
         return fileManager.fileExists(atPath: url.path)
     }
 
-    func url(relativePath: String, jobID: UUID) throws -> URL {
-        try safeURL(relativePath: relativePath, jobID: jobID)
+    func materializedURL(relativePath: String, jobID: UUID) throws -> URL {
+        let destination = try materializedFileURL(relativePath: relativePath, jobID: jobID)
+        try fileManager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try read(relativePath: relativePath, jobID: jobID)
+            .write(to: destination, options: [.atomic, .completeFileProtectionUnlessOpen])
+        return destination
     }
 
-    func directory(for id: UUID) -> URL {
-        jobURL(for: id)
+    func materializedDirectory(for id: UUID) throws -> URL {
+        let destination = materializedJobURL(for: id)
+        try? fileManager.removeItem(at: destination)
+        try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+        try materializeTree(jobID: id, at: destination)
+        return destination
+    }
+
+    func workingDirectory(for id: UUID) throws -> URL {
+        let destination = materializedRoot
+            .appendingPathComponent("\(id.uuidString.lowercased())-work", isDirectory: true)
+        try? fileManager.removeItem(at: destination)
+        try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+        try materializeTree(jobID: id, at: destination)
+        return destination
+    }
+
+    func absorbWorkingDirectory(_ directory: URL, jobID: UUID) throws {
+        guard directory.standardizedFileURL.path.hasPrefix(materializedRoot.standardizedFileURL.path + "/") else {
+            throw MathNoteError.message("An unsafe working directory was rejected.")
+        }
+        guard let enumerator = fileManager.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+        for case let fileURL as URL in enumerator {
+            let values = try fileURL.resourceValues(forKeys: [.isRegularFileKey])
+            guard values.isRegularFile == true else { continue }
+            let relative = String(fileURL.path.dropFirst(directory.path.count + 1))
+            guard relative != "manifest.json" else { continue }
+            try write(
+                Data(contentsOf: fileURL, options: [.mappedIfSafe]),
+                relativePath: relative,
+                jobID: jobID
+            )
+        }
     }
 
     func delete(_ id: UUID) throws {
         let url = jobURL(for: id)
-        guard fileManager.fileExists(atPath: url.path) else { return }
-        try fileManager.removeItem(at: url)
+        if fileManager.fileExists(atPath: url.path) { try fileManager.removeItem(at: url) }
+        try? fileManager.removeItem(at: materializedJobURL(for: id))
+        try? fileManager.removeItem(
+            at: materializedRoot.appendingPathComponent("\(id.uuidString.lowercased())-work", isDirectory: true)
+        )
     }
 
     func deleteAll() throws {
         guard fileManager.fileExists(atPath: rootURL.path) else { return }
         let contents = try fileManager.contentsOfDirectory(at: rootURL, includingPropertiesForKeys: nil)
-        for url in contents {
-            try fileManager.removeItem(at: url)
-        }
+        for url in contents { try fileManager.removeItem(at: url) }
+        try? fileManager.removeItem(at: materializedRoot)
     }
 
     private func ensureRoot() throws {
@@ -162,8 +220,37 @@ actor MathNoteJobStore {
         try? mutableRoot.setResourceValues(values)
     }
 
+    private func materializeTree(jobID: UUID, at destination: URL) throws {
+        let source = jobURL(for: jobID)
+        guard let enumerator = fileManager.enumerator(
+            at: source,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+        for case let fileURL as URL in enumerator {
+            let values = try fileURL.resourceValues(forKeys: [.isRegularFileKey])
+            guard values.isRegularFile == true else { continue }
+            let relative = String(fileURL.path.dropFirst(source.path.count + 1))
+            let target = destination.appendingPathComponent(relative)
+            try fileManager.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try read(relativePath: relative, jobID: jobID)
+                .write(to: target, options: [.atomic, .completeFileProtectionUnlessOpen])
+        }
+    }
+
     private func jobURL(for id: UUID) -> URL {
         rootURL.appendingPathComponent(id.uuidString.lowercased(), isDirectory: true)
+    }
+
+    private func materializedJobURL(for id: UUID) -> URL {
+        materializedRoot.appendingPathComponent(id.uuidString.lowercased(), isDirectory: true)
+    }
+
+    private func materializedFileURL(relativePath: String, jobID: UUID) throws -> URL {
+        guard !relativePath.hasPrefix("/"), !relativePath.contains("..") else {
+            throw MathNoteError.message("An unsafe job path was rejected.")
+        }
+        return materializedJobURL(for: jobID).appendingPathComponent(relativePath)
     }
 
     private func safeURL(relativePath: String, jobID: UUID) throws -> URL {
@@ -178,12 +265,16 @@ actor MathNoteJobStore {
         return url
     }
 
-    private func loadManifest(at url: URL) throws -> MathNoteJobManifest {
-        try decoder.decode(MathNoteJobManifest.self, from: Data(contentsOf: url))
+    private func context(relativePath: String, jobID: UUID) -> String {
+        "academic/\(jobID.uuidString.lowercased())/\(relativePath)"
     }
 
-    private func writeAtomically(_ data: Data, to url: URL) throws {
-        try data.write(to: url, options: [.atomic, .completeFileProtectionUnlessOpen])
+    private func loadManifest(at url: URL, jobID: UUID) throws -> MathNoteJobManifest {
+        let stored = try Data(contentsOf: url, options: [.mappedIfSafe])
+        let plaintext = try vault.open(stored, context: context(relativePath: "manifest.json", jobID: jobID))
+        let manifest = try decoder.decode(MathNoteJobManifest.self, from: plaintext)
+        if !vault.isSealed(stored) { try save(manifest) }
+        return manifest
     }
 }
 

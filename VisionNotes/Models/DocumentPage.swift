@@ -8,7 +8,7 @@ final class DocumentPage {
     var document: LibraryDocument?
     /// 1-based page number, matching what the reader shows the user.
     var pageNumber: Int
-    var recognizedText: String
+    @Attribute(.externalStorage) var recognizedTextCiphertext: Data
     /// File name of the page image in the sandbox (original image, or the
     /// cached render of a PDF page). `nil` when no cache could be written.
     var imageFileName: String?
@@ -29,10 +29,31 @@ final class DocumentPage {
         self.id = id
         self.document = document
         self.pageNumber = pageNumber
-        self.recognizedText = recognizedText
+        recognizedTextCiphertext = EncryptedTextCodec.seal(
+            recognizedText,
+            recordID: id,
+            field: "page-recognized-text"
+        )
         self.imageFileName = imageFileName
         self.createdAt = createdAt
         self.textBlocks = textBlocks
+    }
+
+    var recognizedText: String {
+        get {
+            EncryptedTextCodec.open(
+                recognizedTextCiphertext,
+                recordID: id,
+                field: "page-recognized-text"
+            )
+        }
+        set {
+            recognizedTextCiphertext = EncryptedTextCodec.seal(
+                newValue,
+                recordID: id,
+                field: "page-recognized-text"
+            )
+        }
     }
 
     /// Text blocks in natural reading order.

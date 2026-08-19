@@ -28,6 +28,9 @@ final class FileStorageServiceTests: XCTestCase {
 
         XCTAssertTrue(storage.fileExists("a.txt", in: .sources))
         XCTAssertEqual(try storage.data(forFileName: "a.txt", in: .sources), payload)
+        let persisted = try Data(contentsOf: root.appendingPathComponent("Sources/a.txt"))
+        XCTAssertNotEqual(persisted, payload)
+        XCTAssertTrue(persisted.starts(with: EncryptedDataVault.header))
     }
 
     func testDirectoriesAreIsolatedFromEachOther() throws {

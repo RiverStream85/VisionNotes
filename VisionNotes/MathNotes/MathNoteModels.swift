@@ -14,8 +14,8 @@ enum MathNoteStage: String, Codable, CaseIterable, Sendable {
         switch self {
         case .draft: "Draft"
         case .preparing: "Preparing pages"
-        case .baseOCR: "Base OCR"
-        case .refining: "Vision correction"
+        case .baseOCR: "On-device OCR"
+        case .refining: "Firebird reconstruction"
         case .rendering: "Building documents"
         case .complete: "Complete"
         case .failed: "Needs attention"
@@ -70,7 +70,7 @@ struct MathNotePageRecord: Identifiable, Codable, Equatable, Sendable {
 }
 
 struct MathNoteJobManifest: Identifiable, Codable, Equatable, Sendable {
-    static let currentVersion = 1
+    static let currentVersion = 2
 
     var version = currentVersion
     let id: UUID
@@ -85,9 +85,13 @@ struct MathNoteJobManifest: Identifiable, Codable, Equatable, Sendable {
     var rendererDescription: String
     var stageProgress: Double?
     var stageDetail: String?
+    /// `true` only after the user selects the cloud-fallback action for this
+    /// job. Missing on version-1 manifests and therefore treated as false.
+    var cloudFallbackAllowed: Bool?
 
     var pageCount: Int { pages.count }
     var displayedProgress: Double { stageProgress ?? stage.progress }
+    var allowsCloudFallback: Bool { cloudFallbackAllowed == true }
 
     init(id: UUID = UUID(), title: String, pages: [MathNotePageRecord]) {
         self.id = id
@@ -102,6 +106,7 @@ struct MathNoteJobManifest: Identifiable, Codable, Equatable, Sendable {
         rendererDescription = "On-device HTML + MathML rendered by WebKit"
         stageProgress = nil
         stageDetail = nil
+        cloudFallbackAllowed = false
     }
 }
 
@@ -137,9 +142,9 @@ struct MathNoteRefinementRecord: Codable, Equatable, Sendable {
     let pages: [MathNotePageRefinement]
 
     init(pages: [MathNotePageRefinement]) {
-        version = 1
-        provider = "SiliconFlow"
-        model = SiliconFlowVisionClient.model
+        version = 2
+        provider = pages.first?.provider ?? "On-device"
+        model = pages.first?.model ?? FirebirdLocalModel.modelName
         createdAt = Date()
         self.pages = pages
     }
@@ -149,35 +154,15 @@ struct ProviderKeys: Sendable, Equatable {
     let mistral: String
     let siliconFlow: String
 
-    static func load(bundle: Bundle = .main) throws -> ProviderKeys {
-        guard let url = bundle.url(forResource: "ProviderKeys", withExtension: "plist") else {
-            throw MathNoteError.missingProviderKeys
-        }
-        let file: ProviderKeysFile
-        do {
-            file = try PropertyListDecoder().decode(
-                ProviderKeysFile.self,
-                from: Data(contentsOf: url)
-            )
-        } catch {
-            throw MathNoteError.invalidProviderKeys
-        }
-        let mistral = file.mistral.trimmingCharacters(in: .whitespacesAndNewlines)
-        let siliconFlow = file.siliconFlow.trimmingCharacters(in: .whitespacesAndNewlines)
+    static func load(store: CloudProviderCredentialStore = .shared) throws -> ProviderKeys {
+        let mistral = try store.value(for: .mistral)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let siliconFlow = try store.value(for: .qwen3VL)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !mistral.isEmpty, !siliconFlow.isEmpty else {
             throw MathNoteError.emptyProviderKey
         }
         return ProviderKeys(mistral: mistral, siliconFlow: siliconFlow)
-    }
-}
-
-private struct ProviderKeysFile: Decodable {
-    let mistral: String
-    let siliconFlow: String
-
-    enum CodingKeys: String, CodingKey {
-        case mistral = "MistralAPIKey"
-        case siliconFlow = "SiliconFlowAPIKey"
     }
 }
 
@@ -191,6 +176,8 @@ enum MathNoteError: LocalizedError, Equatable, Sendable {
     case malformedProviderResponse
     case providerRejected(status: Int)
     case providerUnavailable
+    case localInferenceUnavailable
+    case cloudFallbackNotAuthorized
     case visionRequestsIncomplete(completed: Int, total: Int)
     case refinementPageMismatch(expected: Int, actual: Int)
     case renderTimedOut
@@ -202,11 +189,11 @@ enum MathNoteError: LocalizedError, Equatable, Sendable {
     var errorDescription: String? {
         switch self {
         case .missingProviderKeys:
-            "ProviderKeys.plist is missing from the app bundle."
+            "Cloud fallback credentials are not saved in this device's Keychain."
         case .invalidProviderKeys:
-            "ProviderKeys.plist could not be decoded."
+            "A cloud fallback credential in the device Keychain could not be read."
         case .emptyProviderKey:
-            "A provider key is empty in ProviderKeys.plist."
+            "A cloud fallback credential in the device Keychain is empty."
         case .invalidImage:
             "One of the selected pages is not a readable image."
         case .emptyDraft:
@@ -219,6 +206,10 @@ enum MathNoteError: LocalizedError, Equatable, Sendable {
             "The OCR provider returned HTTP \(status). Check its quota and try again."
         case .providerUnavailable:
             "The OCR provider could not be reached. Check your connection and try again."
+        case .localInferenceUnavailable:
+            "The on-device Firebird model could not finish this page. You can retry locally or explicitly allow the cloud fallback."
+        case .cloudFallbackNotAuthorized:
+            "Cloud OCR was not used because this job has no explicit cloud-fallback consent."
         case .visionRequestsIncomplete(let completed, let total):
             "Vision correction paused after saving \(completed) of \(total) requests. Resume retries only the unfinished requests."
         case .refinementPageMismatch(let expected, let actual):
@@ -239,7 +230,7 @@ enum MathNoteError: LocalizedError, Equatable, Sendable {
     var recoverySuggestion: String? {
         switch self {
         case .missingProviderKeys, .invalidProviderKeys, .emptyProviderKey:
-            "Add one valid Mistral key and one valid SiliconFlow key to the target resource, then rebuild the app."
+            "Save valid Mistral and Qwen3-VL credentials in the device Keychain before opting into cloud fallback."
         case .providerRejected, .providerUnavailable, .visionRequestsIncomplete:
             "Completed stages remain cached, so Retry will not repeat them."
         case .cancelled:

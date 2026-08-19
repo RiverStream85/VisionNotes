@@ -1,3 +1,4 @@
+import CryptoKit
 import PDFKit
 import UIKit
 import XCTest
@@ -175,6 +176,13 @@ final class AcademicOCRTests: XCTestCase {
         XCTAssertEqual(loaded.pages.map(\.index), [0, 1])
         XCTAssertEqual(loaded.pages.map(\.sourcePath), ["pages/page-001.jpg", "pages/page-002.jpg"])
         XCTAssertEqual(loaded.stage, .baseOCR)
+        XCTAssertFalse(loaded.allowsCloudFallback)
+        let persistedPage = directory
+            .appendingPathComponent(job.id.uuidString.lowercased())
+            .appendingPathComponent("pages/page-001.jpg")
+        let ciphertext = try Data(contentsOf: persistedPage)
+        XCTAssertTrue(ciphertext.starts(with: EncryptedDataVault.header))
+        XCTAssertFalse(String(decoding: ciphertext, as: UTF8.self).contains("first"))
         try await store.delete(job.id)
         await XCTAssertThrowsErrorAsync { _ = try await store.load(job.id) }
     }
@@ -215,17 +223,43 @@ final class AcademicOCRTests: XCTestCase {
         XCTAssertFalse(text.lowercased().contains("providerkeys"))
     }
 
-    func testExactlyOneProviderKeyResourceExistsInBundle() throws {
+    func testProviderKeysAreNotBundledAsPlistResources() throws {
         let resources = Bundle.main.urls(forResourcesWithExtension: "plist", subdirectory: nil) ?? []
         let providerResources = resources.filter { $0.lastPathComponent == "ProviderKeys.plist" }
-        XCTAssertEqual(providerResources.count, 1)
+        XCTAssertTrue(providerResources.isEmpty)
+    }
 
-        let data = try Data(contentsOf: XCTUnwrap(providerResources.first))
-        let plist = try XCTUnwrap(
-            PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+    func testAESGCMVaultAuthenticatesPathAndRejectsTampering() throws {
+        let key = SymmetricKey(data: Data(repeating: 0x4f, count: 32))
+        let vault = EncryptedDataVault(keyProvider: { key })
+        let plaintext = Data("private theorem notes".utf8)
+        let sealed = try vault.seal(plaintext, context: "notes/a")
+
+        XCTAssertTrue(sealed.starts(with: EncryptedDataVault.header))
+        XCTAssertEqual(try vault.open(sealed, context: "notes/a"), plaintext)
+        XCTAssertThrowsError(try vault.open(sealed, context: "notes/b"))
+
+        var tampered = sealed
+        tampered[tampered.index(before: tampered.endIndex)] ^= 0x01
+        XCTAssertThrowsError(try vault.open(tampered, context: "notes/a"))
+    }
+
+    func testFirebirdColdStartProvisionsEncryptedWeightsInAppContainer() async throws {
+        let directory = makeTemporaryDirectory()
+        let key = SymmetricKey(data: Data(repeating: 0x2a, count: 32))
+        let vault = EncryptedDataVault(keyProvider: { key })
+        let store = FirebirdWeightStore(rootURL: directory, vault: vault)
+
+        let weights = try await store.loadOrProvision()
+        let weightURL = directory.appendingPathComponent("firebird-math.weights.aesgcm")
+        let persisted = try Data(contentsOf: weightURL)
+
+        XCTAssertEqual(weights.hiddenSize, FirebirdWeights.hiddenSize)
+        XCTAssertEqual(weights.embeddings.count, weights.vocabularySize * weights.hiddenSize)
+        XCTAssertTrue(persisted.starts(with: EncryptedDataVault.header))
+        XCTAssertNoThrow(
+            try vault.open(persisted, context: "models/firebird/firebird-math.weights")
         )
-        XCTAssertNotNil(plist["MistralAPIKey"] as? String)
-        XCTAssertNotNil(plist["SiliconFlowAPIKey"] as? String)
     }
 
     func testNormalizationPreservesOrientationAndFacsimilePageCount() async throws {
@@ -268,6 +302,7 @@ final class AcademicOCRTests: XCTestCase {
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         object.removeValue(forKey: "stageProgress")
         object.removeValue(forKey: "stageDetail")
+        object.removeValue(forKey: "cloudFallbackAllowed")
         let legacyData = try JSONSerialization.data(withJSONObject: object)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601

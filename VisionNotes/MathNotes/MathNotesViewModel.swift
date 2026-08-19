@@ -129,7 +129,7 @@ final class MathNotesViewModel {
         draftTitle = ""
     }
 
-    func startConversion() {
+    func startConversion(cloudFallbackAllowed: Bool = false) {
         guard processingTask == nil else { return }
         let pages = draftPages.map(\.data)
         guard !pages.isEmpty else {
@@ -142,10 +142,14 @@ final class MathNotesViewModel {
             defer { processingTask = nil }
             do {
                 let job = try await store.createJob(title: title, normalizedPages: pages)
+                let configuredJob = try await store.setCloudFallbackConsent(
+                    job.id,
+                    allowed: cloudFallbackAllowed
+                )
                 activeJobID = job.id
                 draftPages.removeAll()
                 draftTitle = ""
-                upsert(job)
+                upsert(configuredJob)
                 _ = try await pipeline.run(jobID: job.id, progress: progressHandler)
                 await loadJobs()
                 await selectJob(job.id)
@@ -182,7 +186,7 @@ final class MathNotesViewModel {
             let job = try await store.load(id)
             selectedJob = job
             selectedSource = try await pipeline.source(jobID: id)
-            selectedJobDirectory = await store.directory(for: id)
+            selectedJobDirectory = try await store.materializedDirectory(for: id)
         } catch {
             errorMessage = error.mathNoteSafeMessage
         }

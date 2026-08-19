@@ -11,7 +11,7 @@ import SwiftData
 final class TextBlock {
     @Attribute(.unique) var id: UUID
     var page: DocumentPage?
-    var text: String
+    @Attribute(.externalStorage) var textCiphertext: Data
     var confidence: Float
     var boundingBoxX: Double
     var boundingBoxY: Double
@@ -32,13 +32,34 @@ final class TextBlock {
     ) {
         self.id = id
         self.page = page
-        self.text = text
+        textCiphertext = EncryptedTextCodec.seal(
+            text,
+            recordID: id,
+            field: "recognized-text-block"
+        )
         self.confidence = confidence
         self.boundingBoxX = boundingBoxX
         self.boundingBoxY = boundingBoxY
         self.boundingBoxWidth = boundingBoxWidth
         self.boundingBoxHeight = boundingBoxHeight
         self.readingOrder = readingOrder
+    }
+
+    var text: String {
+        get {
+            EncryptedTextCodec.open(
+                textCiphertext,
+                recordID: id,
+                field: "recognized-text-block"
+            )
+        }
+        set {
+            textCiphertext = EncryptedTextCodec.seal(
+                newValue,
+                recordID: id,
+                field: "recognized-text-block"
+            )
+        }
     }
 
     convenience init(recognized: RecognizedTextBlock, page: DocumentPage? = nil) {

@@ -26,14 +26,19 @@ struct MathNotesView: View {
     private var dialogLayer: some View {
         importLayer
             .confirmationDialog(
-                "Upload \(viewModel.draftPages.count) pages for Academic OCR?",
+                "Create \(viewModel.draftPages.count)-page Academic document?",
                 isPresented: $confirmsUpload,
                 titleVisibility: .visible
             ) {
-                Button("Upload and process") { viewModel.startConversion() }
+                Button("Process on this iPhone") {
+                    viewModel.startConversion(cloudFallbackAllowed: false)
+                }
+                Button("Allow cloud fallback") {
+                    viewModel.startConversion(cloudFallbackAllowed: true)
+                }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Pages are sent directly from this iPhone to Mistral for base OCR and SiliconFlow for mathematical correction. Results and evidence are cached locally.")
+                Text("Firebird runs on this iPhone by default. The optional fallback sends pages to Mistral and Qwen3-VL only if local reconstruction cannot finish.")
             }
             .alert("Delete all Academic jobs?", isPresented: $confirmsDeleteAll) {
                 Button("Delete all", role: .destructive) { viewModel.deleteAll() }
@@ -146,7 +151,7 @@ struct MathNotesView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(viewModel.isWorking)
-                .accessibilityHint("Shows a network upload confirmation before processing")
+                .accessibilityHint("Uses on-device Firebird by default and offers an optional cloud fallback")
             }
         } header: {
             Text("New Academic document")
@@ -180,8 +185,8 @@ struct MathNotesView: View {
 
     private var privacySection: some View {
         Section {
-            Label("Academic OCR uploads confirmed pages to Mistral and SiliconFlow.", systemImage: "network")
-            Text("The ordinary Import tab remains fully on-device. Academic jobs and exports stay in the app until you share them. Provider keys bundled for this development build can be extracted from the app; quotas and provider privacy terms apply.")
+            Label("Academic reconstruction runs with Firebird on-device.", systemImage: "iphone.gen3")
+            Text("Notes and Firebird weights are AES-GCM sealed in the app container. Encryption and optional provider credentials are held by the Secure Enclave or ThisDeviceOnly Keychain. Mistral and Qwen3-VL are used only after you choose the cloud fallback.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         } header: {
@@ -480,7 +485,7 @@ private struct MathNoteJobDetailView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(viewModel.isWorking || viewModel.selectedSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            Text("Recompile rebuilds HTML, semantic PDF, TeX and ZIP without contacting either OCR provider. Previous edits are retained in the job archive.")
+            Text("Recompile rebuilds HTML, semantic PDF, TeX and ZIP locally. Previous edits are retained in the encrypted job archive.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

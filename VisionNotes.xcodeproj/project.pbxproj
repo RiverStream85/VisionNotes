@@ -65,6 +65,11 @@
 		E1000000000000000000000A /* MathNotesViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000000000000000000000A /* MathNotesViewModel.swift */; };
 		E1000000000000000000000B /* MathNotesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000000000000000000000B /* MathNotesView.swift */; };
 		E20000000000000000000001 /* AcademicOCRTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000001 /* AcademicOCRTests.swift */; };
+		E31000000000000000000001 /* SecureKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F31000000000000000000001 /* SecureKeyStore.swift */; };
+		E31000000000000000000002 /* EncryptedDataVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = F31000000000000000000002 /* EncryptedDataVault.swift */; };
+		E31000000000000000000003 /* CloudProviderCredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F31000000000000000000003 /* CloudProviderCredentialStore.swift */; };
+		E31000000000000000000004 /* FirebirdLocalModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F31000000000000000000004 /* FirebirdLocalModel.swift */; };
+		E31000000000000000000005 /* FirebirdFusedKernel.metal in Sources */ = {isa = PBXBuildFile; fileRef = F31000000000000000000005 /* FirebirdFusedKernel.metal */; };
 		E4655E3481FBC15A7178FFE2 /* VisionNotesUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 008B77EFDC6AC2061D5B5551 /* VisionNotesUITests.swift */; };
 		E58C331B921AC81B532D1428 /* TextRecognitionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E92539D3A35228552E1B2FE /* TextRecognitionService.swift */; };
 		F39BC494587E62449138FADB /* LibraryViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A759E734A15942FC5EAF3C8 /* LibraryViewModel.swift */; };
@@ -148,8 +153,12 @@
 		F10000000000000000000009 /* DocumentScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentScannerView.swift; sourceTree = "<group>"; };
 		F1000000000000000000000A /* MathNotesViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MathNotesViewModel.swift; sourceTree = "<group>"; };
 		F1000000000000000000000B /* MathNotesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MathNotesView.swift; sourceTree = "<group>"; };
-		F1000000000000000000000C /* ProviderKeys.example.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = ProviderKeys.example.plist; sourceTree = "<group>"; };
 		F20000000000000000000001 /* AcademicOCRTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcademicOCRTests.swift; sourceTree = "<group>"; };
+		F31000000000000000000001 /* SecureKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureKeyStore.swift; sourceTree = "<group>"; };
+		F31000000000000000000002 /* EncryptedDataVault.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EncryptedDataVault.swift; sourceTree = "<group>"; };
+		F31000000000000000000003 /* CloudProviderCredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudProviderCredentialStore.swift; sourceTree = "<group>"; };
+		F31000000000000000000004 /* FirebirdLocalModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirebirdLocalModel.swift; sourceTree = "<group>"; };
+		F31000000000000000000005 /* FirebirdFusedKernel.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = FirebirdFusedKernel.metal; sourceTree = "<group>"; };
 		F2B5B94C2EA07DA9E42DB0A0 /* TextBlock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextBlock.swift; sourceTree = "<group>"; };
 		F42DDA1168DDA41AE60468C1 /* BoundingBoxConverter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundingBoxConverter.swift; sourceTree = "<group>"; };
 		F45213EE8CD1BD91F703902A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -251,7 +260,6 @@
 			isa = PBXGroup;
 			children = (
 				F45213EE8CD1BD91F703902A /* Assets.xcassets */,
-				F1000000000000000000000C /* ProviderKeys.example.plist */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -305,6 +313,7 @@
 				17CD4353267F96232C7FC791 /* Models */,
 				3DC0002850B83ECB640C911A /* Persistence */,
 				7B82012031BF8183412EB2D1 /* Resources */,
+				F31000000000000000000010 /* Security */,
 				FFF1114519579BF833A7BAE6 /* Services */,
 				C7576101B875A076FFC2AC1B /* Utilities */,
 				9D1136874929E9EAE07D8680 /* ViewModels */,
@@ -344,8 +353,20 @@
 				F10000000000000000000009 /* DocumentScannerView.swift */,
 				F1000000000000000000000A /* MathNotesViewModel.swift */,
 				F1000000000000000000000B /* MathNotesView.swift */,
+				F31000000000000000000003 /* CloudProviderCredentialStore.swift */,
+				F31000000000000000000004 /* FirebirdLocalModel.swift */,
+				F31000000000000000000005 /* FirebirdFusedKernel.metal */,
 			);
 			path = MathNotes;
+			sourceTree = "<group>";
+		};
+		F31000000000000000000010 /* Security */ = {
+			isa = PBXGroup;
+			children = (
+				F31000000000000000000001 /* SecureKeyStore.swift */,
+				F31000000000000000000002 /* EncryptedDataVault.swift */,
+			);
+			path = Security;
 			sourceTree = "<group>";
 		};
 		F20000000000000000000002 /* MathNotes */ = {
@@ -402,7 +423,6 @@
 				AEC497F370DDBAD803AF44CD /* Sources */,
 				819DFE531B15C2032D92F353 /* Frameworks */,
 				9AB79077DFDD75F158996501 /* Resources */,
-				E30000000000000000000001 /* Copy Local Provider Keys */,
 			);
 			buildRules = (
 			);
@@ -499,29 +519,6 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
-/* Begin PBXShellScriptBuildPhase section */
-		E30000000000000000000001 /* Copy Local Provider Keys */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-			);
-			name = "Copy Local Provider Keys";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "set -eu\nKEYS_FILE=\"${SRCROOT}/VisionNotes/Resources/ProviderKeys.plist\"\nif [ ! -f \"${KEYS_FILE}\" ]; then\n  KEYS_FILE=\"${SRCROOT}/VisionNotes/Resources/ProviderKeys.example.plist\"\nfi\ncp \"${KEYS_FILE}\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/ProviderKeys.plist\"\n";
-			showEnvVarsInLog = 0;
-		};
-/* End PBXShellScriptBuildPhase section */
-
 /* Begin PBXSourcesBuildPhase section */
 		0EF4E3D5BD466F076C3DEDDD /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -551,6 +548,11 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E31000000000000000000001 /* SecureKeyStore.swift in Sources */,
+				E31000000000000000000002 /* EncryptedDataVault.swift in Sources */,
+				E31000000000000000000003 /* CloudProviderCredentialStore.swift in Sources */,
+				E31000000000000000000004 /* FirebirdLocalModel.swift in Sources */,
+				E31000000000000000000005 /* FirebirdFusedKernel.metal in Sources */,
 				E10000000000000000000001 /* MathNoteModels.swift in Sources */,
 				E10000000000000000000002 /* MathNoteJobStore.swift in Sources */,
 				E10000000000000000000003 /* ProviderClients.swift in Sources */,

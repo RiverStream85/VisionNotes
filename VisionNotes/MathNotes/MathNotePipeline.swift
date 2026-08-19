@@ -20,7 +20,6 @@ struct MathNotePipeline: Sendable {
     func run(jobID: UUID, progress: ProgressHandler? = nil) async throws -> MathNoteJobManifest {
         do {
             var manifest = try await transition(jobID, to: .preparing, progress: progress)
-            let jobDirectory = await store.directory(for: jobID)
             let pageURLs = try await sourcePageURLs(manifest)
 
             if !(await store.exists(relativePath: "input.pdf", jobID: jobID)) {
@@ -31,133 +30,17 @@ struct MathNotePipeline: Sendable {
             }
 
             manifest = try await transition(jobID, to: .baseOCR, progress: progress)
-            let rawOCR: Data
-            if await store.exists(relativePath: "ocr.json", jobID: jobID) {
-                rawOCR = try await store.read(relativePath: "ocr.json", jobID: jobID)
-            } else {
-                let keys = try ProviderKeys.load(bundle: bundle)
-                let inputPDF = try await store.read(relativePath: "input.pdf", jobID: jobID)
-                rawOCR = try await MistralOCRClient(key: keys.mistral).recognize(
-                    documentData: inputPDF,
-                    mimeType: "application/pdf"
-                )
-                // The provider response is written byte-for-byte once and never overwritten.
-                try await store.write(rawOCR, relativePath: "ocr.json", jobID: jobID, overwrite: false)
-            }
-
-            let parsed = try MistralOCRParser.parse(rawOCR)
-            guard parsed.pages.count == manifest.pageCount else {
-                throw MathNoteError.refinementPageMismatch(
-                    expected: manifest.pageCount,
-                    actual: parsed.pages.count
-                )
-            }
-            for asset in parsed.assets {
-                try await store.write(
-                    asset.data,
-                    relativePath: "assets/\(asset.localName)",
-                    jobID: jobID,
-                    overwrite: false
-                )
-            }
-
             manifest = try await transition(jobID, to: .refining, progress: progress)
-            var refinements: [MathNotePageRefinement] = []
-            let refinementPageCount = manifest.pageCount
-            for pageIndex in manifest.pages.indices {
-                try Task.checkCancellation()
-                let cachePath = String(format: "refinement-page-%03d.json", pageIndex + 1)
-                if await store.exists(relativePath: cachePath, jobID: jobID) {
-                    let data = try await store.read(relativePath: cachePath, jobID: jobID)
-                    let cached = try Self.decoder.decode(MathNotePageRefinement.self, from: data)
-                    guard cached.pageIndex == pageIndex else {
-                        throw MathNoteError.refinementPageMismatch(expected: pageIndex, actual: cached.pageIndex)
-                    }
-                    refinements.append(cached)
-                    try await reportRefinementProgress(
-                        jobID: jobID,
-                        pageIndex: pageIndex,
-                        pageCount: refinementPageCount,
-                        localFraction: 1,
-                        detail: "Page \(pageIndex + 1) of \(refinementPageCount) · using cached correction",
-                        progress: progress
-                    )
-                    continue
+            let refinements: [MathNotePageRefinement]
+            do {
+                refinements = try await localRefinements(manifest: manifest, progress: progress)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                guard manifest.allowsCloudFallback else {
+                    throw MathNoteError.cloudFallbackNotAuthorized
                 }
-
-                try await reportRefinementProgress(
-                    jobID: jobID,
-                    pageIndex: pageIndex,
-                    pageCount: refinementPageCount,
-                    localFraction: 0,
-                    detail: "Page \(pageIndex + 1) of \(refinementPageCount) · preparing vision inputs",
-                    progress: progress
-                )
-                let keys = try ProviderKeys.load(bundle: bundle)
-                let sourceData = try await store.read(
-                    relativePath: manifest.pages[pageIndex].sourcePath,
-                    jobID: jobID
-                )
-                let inputs = try await MathImagePreprocessor.prepareVisionInputs(sourceData: sourceData)
-                let client = SiliconFlowVisionClient(key: keys.siliconFlow)
-                let evidence = try await transcribe(
-                    inputs: inputs,
-                    client: client,
-                    jobID: jobID,
-                    pageIndex: pageIndex
-                ) { completed, total in
-                    try await reportRefinementProgress(
-                        jobID: jobID,
-                        pageIndex: pageIndex,
-                        pageCount: refinementPageCount,
-                        localFraction: 0.78 * Double(completed) / Double(max(total, 1)),
-                        detail: "Page \(pageIndex + 1) of \(refinementPageCount) · vision \(completed)/\(total) · each result saved",
-                        progress: progress
-                    )
-                }
-                try await reportRefinementProgress(
-                    jobID: jobID,
-                    pageIndex: pageIndex,
-                    pageCount: refinementPageCount,
-                    localFraction: 0.82,
-                    detail: "Page \(pageIndex + 1) of \(refinementPageCount) · merging evidence",
-                    progress: progress
-                )
-                let merge = try await client.merge(
-                    prompt: MathNotePrompts.merge(
-                        overview: evidence.overview.text,
-                        crops: evidence.crops.map(\.text),
-                        legacy: parsed.pages[pageIndex]
-                    )
-                )
-                let page = MathNotePageRefinement(
-                    pageIndex: pageIndex,
-                    provider: "SiliconFlow",
-                    model: SiliconFlowVisionClient.model,
-                    overviewTranscript: evidence.overview.text,
-                    overviewUsage: evidence.overview.usage,
-                    crops: evidence.crops.enumerated().map { offset, completion in
-                        MathNoteCropTranscript(
-                            index: offset,
-                            transcript: completion.text,
-                            usage: completion.usage
-                        )
-                    },
-                    mergeTranscript: merge.text,
-                    mergeUsage: merge.usage,
-                    finalMarkdown: merge.text
-                )
-                let encoded = try Self.encoder.encode(page)
-                try await store.write(encoded, relativePath: cachePath, jobID: jobID, overwrite: false)
-                refinements.append(page)
-                try await reportRefinementProgress(
-                    jobID: jobID,
-                    pageIndex: pageIndex,
-                    pageCount: refinementPageCount,
-                    localFraction: 1,
-                    detail: "Page \(pageIndex + 1) of \(refinementPageCount) · correction cached",
-                    progress: progress
-                )
+                refinements = try await cloudRefinements(manifest: manifest, progress: progress)
             }
 
             guard refinements.count == manifest.pageCount else {
@@ -187,7 +70,10 @@ struct MathNotePipeline: Sendable {
             }
 
             manifest = try await transition(jobID, to: .rendering, progress: progress)
+            let jobDirectory = try await store.workingDirectory(for: jobID)
             try await renderer.render(markdown: source, manifest: manifest, jobDirectory: jobDirectory)
+            try await rebuildArchive(manifest: manifest, directory: jobDirectory)
+            try await store.absorbWorkingDirectory(jobDirectory, jobID: jobID)
             let uncertainCount = Self.uncertainCount(in: source)
             manifest = try await store.update(
                 jobID,
@@ -195,7 +81,6 @@ struct MathNotePipeline: Sendable {
                 failureMessage: nil,
                 uncertainCount: uncertainCount
             )
-            try await rebuildArchive(manifest: manifest, directory: jobDirectory)
             await progress?(manifest)
             return manifest
         } catch is CancellationError {
@@ -221,7 +106,6 @@ struct MathNotePipeline: Sendable {
     func rebuild(jobID: UUID, markdown: String, progress: ProgressHandler? = nil) async throws -> MathNoteJobManifest {
         do {
             var manifest = try await store.load(jobID)
-            let jobDirectory = await store.directory(for: jobID)
             let trimmed = markdown.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { throw MathNoteError.message("The source document is empty.") }
 
@@ -237,14 +121,16 @@ struct MathNotePipeline: Sendable {
             }
             try await store.write(trimmed, relativePath: "edited-source.md", jobID: jobID)
             manifest = try await transition(jobID, to: .rendering, progress: progress)
+            let jobDirectory = try await store.workingDirectory(for: jobID)
             try await renderer.render(markdown: trimmed, manifest: manifest, jobDirectory: jobDirectory)
+            try await rebuildArchive(manifest: manifest, directory: jobDirectory)
+            try await store.absorbWorkingDirectory(jobDirectory, jobID: jobID)
             manifest = try await store.update(
                 jobID,
                 stage: .complete,
                 failureMessage: nil,
                 uncertainCount: Self.uncertainCount(in: trimmed)
             )
-            try await rebuildArchive(manifest: manifest, directory: jobDirectory)
             await progress?(manifest)
             return manifest
         } catch is CancellationError {
@@ -276,10 +162,179 @@ struct MathNotePipeline: Sendable {
         return ""
     }
 
+    private func localRefinements(
+        manifest: MathNoteJobManifest,
+        progress: ProgressHandler?
+    ) async throws -> [MathNotePageRefinement] {
+        let model = FirebirdLocalModel()
+        var refinements: [MathNotePageRefinement] = []
+        for pageIndex in manifest.pages.indices {
+            try Task.checkCancellation()
+            let cachePath = String(format: "firebird-page-%03d.json", pageIndex + 1)
+            if await store.exists(relativePath: cachePath, jobID: manifest.id) {
+                let cached = try Self.decoder.decode(
+                    MathNotePageRefinement.self,
+                    from: await store.read(relativePath: cachePath, jobID: manifest.id)
+                )
+                refinements.append(cached)
+                try await reportRefinementProgress(
+                    jobID: manifest.id,
+                    pageIndex: pageIndex,
+                    pageCount: manifest.pageCount,
+                    localFraction: 1,
+                    detail: "Page \(pageIndex + 1) of \(manifest.pageCount) · encrypted Firebird checkpoint",
+                    progress: progress
+                )
+                continue
+            }
+
+            try await reportRefinementProgress(
+                jobID: manifest.id,
+                pageIndex: pageIndex,
+                pageCount: manifest.pageCount,
+                localFraction: 0.1,
+                detail: "Page \(pageIndex + 1) of \(manifest.pageCount) · on-device Firebird decode",
+                progress: progress
+            )
+            let sourceData = try await store.read(
+                relativePath: manifest.pages[pageIndex].sourcePath,
+                jobID: manifest.id
+            )
+            let completion = try await model.reconstruct(imageData: sourceData)
+            let page = MathNotePageRefinement(
+                pageIndex: pageIndex,
+                provider: "On-device",
+                model: FirebirdLocalModel.modelName,
+                overviewTranscript: completion.markdown,
+                overviewUsage: nil,
+                crops: [],
+                mergeTranscript: completion.markdown,
+                mergeUsage: nil,
+                finalMarkdown: completion.markdown
+            )
+            try await store.write(
+                Self.encoder.encode(page),
+                relativePath: cachePath,
+                jobID: manifest.id,
+                overwrite: false
+            )
+            refinements.append(page)
+            try await reportRefinementProgress(
+                jobID: manifest.id,
+                pageIndex: pageIndex,
+                pageCount: manifest.pageCount,
+                localFraction: 1,
+                detail: "Page \(pageIndex + 1) of \(manifest.pageCount) · Firebird reconstruction sealed",
+                progress: progress
+            )
+        }
+        return refinements
+    }
+
+    /// Retained cloud path. This helper is reachable only after the manifest
+    /// records explicit user consent and the local Firebird path fails.
+    private func cloudRefinements(
+        manifest: MathNoteJobManifest,
+        progress: ProgressHandler?
+    ) async throws -> [MathNotePageRefinement] {
+        guard manifest.allowsCloudFallback else { throw MathNoteError.cloudFallbackNotAuthorized }
+        let keys = try ProviderKeys.load()
+        let rawOCR: Data
+        if await store.exists(relativePath: "cloud-ocr.json", jobID: manifest.id) {
+            rawOCR = try await store.read(relativePath: "cloud-ocr.json", jobID: manifest.id)
+        } else {
+            let inputPDF = try await store.read(relativePath: "input.pdf", jobID: manifest.id)
+            rawOCR = try await MistralOCRClient(key: keys.mistral).recognize(
+                documentData: inputPDF,
+                mimeType: "application/pdf"
+            )
+            try await store.write(
+                rawOCR,
+                relativePath: "cloud-ocr.json",
+                jobID: manifest.id,
+                overwrite: false
+            )
+        }
+
+        let parsed = try MistralOCRParser.parse(rawOCR)
+        guard parsed.pages.count == manifest.pageCount else {
+            throw MathNoteError.refinementPageMismatch(expected: manifest.pageCount, actual: parsed.pages.count)
+        }
+        for asset in parsed.assets {
+            try await store.write(
+                asset.data,
+                relativePath: "assets/\(asset.localName)",
+                jobID: manifest.id,
+                overwrite: false
+            )
+        }
+
+        var refinements: [MathNotePageRefinement] = []
+        for pageIndex in manifest.pages.indices {
+            try Task.checkCancellation()
+            let cachePath = String(format: "cloud-refinement-page-%03d.json", pageIndex + 1)
+            if await store.exists(relativePath: cachePath, jobID: manifest.id) {
+                let data = try await store.read(relativePath: cachePath, jobID: manifest.id)
+                refinements.append(try Self.decoder.decode(MathNotePageRefinement.self, from: data))
+                continue
+            }
+
+            let sourceData = try await store.read(
+                relativePath: manifest.pages[pageIndex].sourcePath,
+                jobID: manifest.id
+            )
+            let inputs = try await MathImagePreprocessor.prepareVisionInputs(sourceData: sourceData)
+            let client = SiliconFlowVisionClient(key: keys.siliconFlow)
+            let evidence = try await transcribe(
+                inputs: inputs,
+                client: client,
+                jobID: manifest.id,
+                pageIndex: pageIndex
+            ) { completed, total in
+                try await reportRefinementProgress(
+                    jobID: manifest.id,
+                    pageIndex: pageIndex,
+                    pageCount: manifest.pageCount,
+                    localFraction: 0.78 * Double(completed) / Double(max(total, 1)),
+                    detail: "Cloud fallback · page \(pageIndex + 1) · \(completed)/\(total)",
+                    progress: progress
+                )
+            }
+            let merge = try await client.merge(
+                prompt: MathNotePrompts.merge(
+                    overview: evidence.overview.text,
+                    crops: evidence.crops.map(\.text),
+                    legacy: parsed.pages[pageIndex]
+                )
+            )
+            let page = MathNotePageRefinement(
+                pageIndex: pageIndex,
+                provider: "Mistral + SiliconFlow",
+                model: "\(MistralOCRClient.model) + \(SiliconFlowVisionClient.model)",
+                overviewTranscript: evidence.overview.text,
+                overviewUsage: evidence.overview.usage,
+                crops: evidence.crops.enumerated().map { offset, completion in
+                    MathNoteCropTranscript(index: offset, transcript: completion.text, usage: completion.usage)
+                },
+                mergeTranscript: merge.text,
+                mergeUsage: merge.usage,
+                finalMarkdown: merge.text
+            )
+            try await store.write(
+                Self.encoder.encode(page),
+                relativePath: cachePath,
+                jobID: manifest.id,
+                overwrite: false
+            )
+            refinements.append(page)
+        }
+        return refinements
+    }
+
     private func sourcePageURLs(_ manifest: MathNoteJobManifest) async throws -> [URL] {
         var urls: [URL] = []
         for page in manifest.pages.sorted(by: { $0.index < $1.index }) {
-            urls.append(try await store.url(relativePath: page.sourcePath, jobID: manifest.id))
+            urls.append(try await store.materializedURL(relativePath: page.sourcePath, jobID: manifest.id))
         }
         return urls
     }

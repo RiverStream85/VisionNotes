@@ -7,7 +7,7 @@ protocol AcademicDocumentRendering: Sendable {
 }
 
 struct AcademicDocumentRenderer: AcademicDocumentRendering {
-    static let semanticPDFMaximumBytes = 80 * 1_024 * 1_024
+    static let webKitPDFMaximumBytes = 80 * 1_024 * 1_024
 
     func render(markdown: String, manifest: MathNoteJobManifest, jobDirectory: URL) async throws {
         try Task.checkCancellation()
@@ -39,19 +39,19 @@ struct AcademicDocumentRenderer: AcademicDocumentRendering {
         let facsimileURL = jobDirectory.appendingPathComponent(artifacts.facsimilePDF)
         try await Task.detached(priority: .userInitiated) {
             let data = try FacsimilePDFBuilder.makePDF(pageURLs: pageURLs)
-            try data.write(to: facsimileURL, options: [.atomic, .completeFileProtectionUnlessOpen])
+            try data.write(to: facsimileURL, options: [.atomic, .completeFileProtection])
         }.value
 
         try Task.checkCancellation()
         let htmlURL = jobDirectory.appendingPathComponent(artifacts.html)
-        let pdfData = try await SemanticWebKitPDFRenderer().render(
+        let pdfData = try await LocalWebKitPDFRenderer().render(
             htmlURL: htmlURL,
             readAccessURL: jobDirectory
         )
-        guard pdfData.count <= Self.semanticPDFMaximumBytes else { throw MathNoteError.renderTooLarge }
+        guard pdfData.count <= Self.webKitPDFMaximumBytes else { throw MathNoteError.renderTooLarge }
         try pdfData.write(
             to: jobDirectory.appendingPathComponent(artifacts.pdf),
-            options: [.atomic, .completeFileProtectionUnlessOpen]
+            options: [.atomic, .completeFileProtection]
         )
 
         try Task.checkCancellation()
@@ -71,7 +71,7 @@ struct AcademicDocumentRenderer: AcademicDocumentRendering {
         guard let data = string.data(using: .utf8) else {
             throw MathNoteError.message("A document could not be encoded as UTF-8.")
         }
-        try data.write(to: url, options: [.atomic, .completeFileProtectionUnlessOpen])
+        try data.write(to: url, options: [.atomic, .completeFileProtection])
     }
 }
 
@@ -103,7 +103,7 @@ enum FacsimilePDFBuilder {
 }
 
 @MainActor
-private final class SemanticWebKitPDFRenderer: NSObject, WKNavigationDelegate {
+private final class LocalWebKitPDFRenderer: NSObject, WKNavigationDelegate {
     private var loadContinuation: CheckedContinuation<Void, Error>?
     private var timeoutTask: Task<Void, Never>?
     private var pdfContinuation: CheckedContinuation<Data, Error>?
@@ -154,27 +154,23 @@ private final class SemanticWebKitPDFRenderer: NSObject, WKNavigationDelegate {
         return data
     }
 
-    nonisolated func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        Task { @MainActor [weak self] in self?.finishLoading(.success(())) }
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        finishLoading(.success(()))
     }
 
-    nonisolated func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        Task { @MainActor [weak self] in
-            self?.finishLoading(.failure(MathNoteError.message("The local document preview failed to load.")))
-        }
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        finishLoading(.failure(MathNoteError.message("The local document preview failed to load.")))
     }
 
-    nonisolated func webView(
+    func webView(
         _ webView: WKWebView,
         didFailProvisionalNavigation navigation: WKNavigation!,
         withError error: Error
     ) {
-        Task { @MainActor [weak self] in
-            self?.finishLoading(.failure(MathNoteError.message("The local document preview failed to load.")))
-        }
+        finishLoading(.failure(MathNoteError.message("The local document preview failed to load.")))
     }
 
-    nonisolated func webView(
+    func webView(
         _ webView: WKWebView,
         decidePolicyFor navigationAction: WKNavigationAction,
         decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
@@ -220,7 +216,7 @@ private final class SemanticWebKitPDFRenderer: NSObject, WKNavigationDelegate {
                         switch result {
                         case .success(let data): self?.finishPDF(.success(data))
                         case .failure:
-                            self?.finishPDF(.failure(MathNoteError.message("The semantic PDF could not be rendered.")))
+                            self?.finishPDF(.failure(MathNoteError.message("The local WebKit PDF could not be rendered.")))
                         }
                     }
                 }

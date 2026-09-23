@@ -119,8 +119,8 @@ struct ImageReaderView: View {
                 .overlay(Rectangle().stroke(Color.orange.opacity(0.9), lineWidth: 1))
                 .frame(width: max(rect.width, 1), height: max(rect.height, 1))
                 .position(x: rect.midX, y: rect.midY)
-                .onTapGesture { selectedBlockText = block.text }
-                .accessibilityLabel(block.text)
+                .onTapGesture { select(block) }
+                .accessibilityLabel(accessibilityText(for: block))
         }
     }
 
@@ -148,8 +148,23 @@ struct ImageReaderView: View {
             }
 
             ScrollView {
-                if let text = page?.recognizedText, !text.isEmpty {
-                    HighlightedBodyText(text: text, terms: highlightTerms, font: .callout)
+                if let page {
+                    switch Result(catching: { try page.decryptedRecognizedText() }) {
+                    case .success(let text) where !text.isEmpty:
+                        HighlightedBodyText(text: text, terms: highlightTerms, font: .callout)
+                    case .success:
+                        Text(document.processingStatus == .processing
+                             ? "Recognizing text…"
+                             : "No text was recognized on this page.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    case .failure:
+                        Label("Encrypted text unavailable", systemImage: "exclamationmark.lock")
+                            .font(.callout)
+                            .foregroundStyle(.red)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 } else {
                     Text(document.processingStatus == .processing
                          ? "Recognizing text…"
@@ -226,6 +241,18 @@ struct ImageReaderView: View {
             get: { selectedBlockText != nil },
             set: { if !$0 { selectedBlockText = nil } }
         )
+    }
+
+    private func select(_ block: TextBlock) {
+        do {
+            selectedBlockText = try block.decryptedText()
+        } catch {
+            errorAlert = ErrorAlert(error)
+        }
+    }
+
+    private func accessibilityText(for block: TextBlock) -> String {
+        (try? block.decryptedText()) ?? "Encrypted text unavailable"
     }
 
     /// Reads the file off the main actor: only `Sendable` values (a file name

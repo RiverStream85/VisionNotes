@@ -83,6 +83,13 @@ struct LibraryView: View {
                 Text(document.processingError ?? "No details were recorded.")
             }
             .errorAlert($viewModel.errorAlert)
+            .task {
+                do {
+                    try DocumentStore(modelContext: modelContext).migrateLegacyContent()
+                } catch {
+                    viewModel.errorAlert = ErrorAlert(error)
+                }
+            }
         }
     }
 
@@ -103,7 +110,7 @@ struct LibraryView: View {
                         Label("Delete", systemImage: "trash")
                     }
                     Button {
-                        renameText = document.title
+                        renameText = ((try? document.title) ?? "Note unavailable")
                         renameTarget = document
                     } label: {
                         Label("Rename", systemImage: "pencil")
@@ -112,7 +119,7 @@ struct LibraryView: View {
                 }
                 .contextMenu {
                     Button {
-                        renameText = document.title
+                        renameText = ((try? document.title) ?? "Note unavailable")
                         renameTarget = document
                     } label: {
                         Label("Rename", systemImage: "pencil")

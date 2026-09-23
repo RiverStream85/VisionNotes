@@ -60,6 +60,17 @@ struct PDFReaderView: View {
         }
         .errorAlert($loadError)
         .task { await prepare() }
+        .onDisappear(perform: releaseMaterializedPDF)
+        .onReceive(
+            NotificationCenter.default.publisher(for: .visionNotesWillSuspendPlaintext)
+        ) { _ in
+            releaseMaterializedPDF()
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .visionNotesDidResumePlaintext)
+        ) { _ in
+            Task { await prepare() }
+        }
     }
 
     // MARK: - Sections
@@ -131,8 +142,23 @@ struct PDFReaderView: View {
             }
 
             ScrollView {
-                if let text = currentPage?.recognizedText, !text.isEmpty {
-                    HighlightedBodyText(text: text, terms: highlightTerms, font: .callout)
+                if let currentPage {
+                    switch Result(catching: { try currentPage.decryptedRecognizedText() }) {
+                    case .success(let text) where !text.isEmpty:
+                        HighlightedBodyText(text: text, terms: highlightTerms, font: .callout)
+                    case .success:
+                        Text(document.processingStatus == .processing
+                             ? "This page has not been recognized yet."
+                             : "No text was recognized on this page.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    case .failure:
+                        Label("Encrypted text unavailable", systemImage: "exclamationmark.lock")
+                            .font(.callout)
+                            .foregroundStyle(.red)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 } else {
                     Text(document.processingStatus == .processing
                          ? "This page has not been recognized yet."
@@ -151,6 +177,9 @@ struct PDFReaderView: View {
     // MARK: - Actions
 
     private func prepare() async {
+        releaseMaterializedPDF()
+        documentURL = nil
+        isReady = false
         currentPageNumber = PDFPageMapper.clampedPageNumber(
             initialPageNumber ?? 1,
             pageCount: max(document.pageCount, 1)
@@ -165,9 +194,17 @@ struct PDFReaderView: View {
             }
             documentURL = url
         } catch {
-            documentURL = nil
+            releaseMaterializedPDF()
             loadError = ErrorAlert(error)
         }
+    }
+
+    private func releaseMaterializedPDF() {
+        FileStorageService.shared.releaseMaterializedFile(
+            fileName: document.localFileName,
+            in: .sources
+        )
+        documentURL = nil
     }
 
     private func goToPage(_ pageNumber: Int) {
@@ -212,22 +249,27 @@ struct PDFKitView: UIViewRepresentable {
         Coordinator(currentPageNumber: $currentPageNumber)
     }
 
+    static func dismantleUIView(_ uiView: PDFView, coordinator: Coordinator) {
+        coordinator.stopObserving()
+        uiView.document = nil
+    }
+
     final class Coordinator: NSObject {
         private let currentPageNumber: Binding<Int>
-        private var observer: NSObjectProtocol?
+        private var pageObserver: NSObjectProtocol?
+        private var suspensionObserver: NSObjectProtocol?
 
         init(currentPageNumber: Binding<Int>) {
             self.currentPageNumber = currentPageNumber
         }
 
         deinit {
-            if let observer {
-                NotificationCenter.default.removeObserver(observer)
-            }
+            stopObserving()
         }
 
         func observe(_ view: PDFView) {
-            observer = NotificationCenter.default.addObserver(
+            stopObserving()
+            pageObserver = NotificationCenter.default.addObserver(
                 forName: .PDFViewPageChanged,
                 object: view,
                 queue: .main
@@ -240,6 +282,24 @@ struct PDFKitView: UIViewRepresentable {
                 if currentPageNumber.wrappedValue != pageNumber {
                     currentPageNumber.wrappedValue = pageNumber
                 }
+            }
+            suspensionObserver = NotificationCenter.default.addObserver(
+                forName: .visionNotesWillSuspendPlaintext,
+                object: nil,
+                queue: .main
+            ) { [weak view] _ in
+                view?.document = nil
+            }
+        }
+
+        func stopObserving() {
+            if let pageObserver {
+                NotificationCenter.default.removeObserver(pageObserver)
+                self.pageObserver = nil
+            }
+            if let suspensionObserver {
+                NotificationCenter.default.removeObserver(suspensionObserver)
+                self.suspensionObserver = nil
             }
         }
 

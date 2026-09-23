@@ -22,7 +22,7 @@ struct DocumentReaderView: View {
                 )
             }
         }
-        .navigationTitle(document.title)
+        .navigationTitle(((try? document.title) ?? "Note unavailable"))
         .navigationBarTitleDisplayMode(.inline)
     }
 }

@@ -1,0 +1,73 @@
+// MLX metalKernel body. One 128-thread group per query head.
+// Inputs: raw projected Q/K/V, norm weights, multimodal cos/sin,
+//         already normalized/rotated history, [historyLength, headCount, kvHeadCount].
+// Q/K RMSNorm + RoPE + QK^T + stable softmax + PV execute in this dispatch.
+const uint lane = thread_position_in_threadgroup.x;
+const uint head = threadgroup_position_in_grid.x;
+const uint historyLength = uint(shape[0]);
+const uint headCount = uint(shape[1]);
+const uint kvHeadCount = uint(shape[2]);
+const uint groups = headCount / kvHeadCount;
+const uint kvHead = head / groups;
+threadgroup float q[128];
+threadgroup float k[128];
+threadgroup float scores[4096];
+threadgroup float reduction[4];
+threadgroup float qScale;
+threadgroup float kScale;
+threadgroup float maximum;
+threadgroup float denominator;
+if (lane == 0) {
+    float qs = 0.0f, ks = 0.0f;
+    for (uint d = 0; d < 128; ++d) {
+        const float a = float(rawQ[head * 128 + d]);
+        const float b = float(rawK[kvHead * 128 + d]);
+        qs += a * a; ks += b * b;
+    }
+    qScale = rsqrt(qs / 128.0f + epsilon[0]);
+    kScale = rsqrt(ks / 128.0f + epsilon[0]);
+}
+threadgroup_barrier(mem_flags::mem_threadgroup);
+q[lane] = float(T(float(rawQ[head * 128 + lane]) * qScale * float(qWeight[lane])));
+k[lane] = float(T(float(rawK[kvHead * 128 + lane]) * kScale * float(kWeight[lane])));
+threadgroup_barrier(mem_flags::mem_threadgroup);
+const uint paired = (lane + 64) % 128;
+const float sign = lane < 64 ? -1.0f : 1.0f;
+const float qr = float(T(q[lane] * float(cosines[lane]) + sign * q[paired] * float(sines[lane])));
+const float kr = float(T(k[lane] * float(cosines[lane]) + sign * k[paired] * float(sines[lane])));
+threadgroup_barrier(mem_flags::mem_threadgroup);
+q[lane] = qr; k[lane] = kr;
+if (head % groups == 0) newK[kvHead * 128 + lane] = T(kr);
+threadgroup_barrier(mem_flags::mem_threadgroup);
+float localMax = -INFINITY;
+for (uint t = lane; t <= historyLength; t += 128) {
+    float dot = 0.0f;
+    for (uint d = 0; d < 128; ++d) {
+        float key = t == historyLength ? k[d] : float(oldK[(kvHead * historyLength + t) * 128 + d]);
+        dot += q[d] * key;
+    }
+    scores[t] = dot * rsqrt(128.0f);
+    localMax = max(localMax, scores[t]);
+}
+float simdMax = simd_max(localMax);
+if (lane % 32 == 0) reduction[lane / 32] = simdMax;
+threadgroup_barrier(mem_flags::mem_threadgroup);
+if (lane == 0) maximum = max(max(reduction[0], reduction[1]), max(reduction[2], reduction[3]));
+threadgroup_barrier(mem_flags::mem_threadgroup);
+float localSum = 0.0f;
+for (uint t = lane; t <= historyLength; t += 128) {
+    scores[t] = exp(scores[t] - maximum);
+    localSum += scores[t];
+}
+float simdSum = simd_sum(localSum);
+if (lane % 32 == 0) reduction[lane / 32] = simdSum;
+threadgroup_barrier(mem_flags::mem_threadgroup);
+if (lane == 0) denominator = reduction[0] + reduction[1] + reduction[2] + reduction[3];
+threadgroup_barrier(mem_flags::mem_threadgroup);
+float result = 0.0f;
+for (uint t = 0; t <= historyLength; ++t) {
+    float value = t == historyLength ? float(rawV[kvHead * 128 + lane])
+        : float(oldV[(kvHead * historyLength + t) * 128 + lane]);
+    result += scores[t] * value;
+}
+attended[head * 128 + lane] = T(result / denominator);

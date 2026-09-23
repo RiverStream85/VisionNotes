@@ -77,10 +77,11 @@ enum StoredZIPWriter {
         archive.appendLE(centralOffset)
         archive.appendLE(UInt16(0))
         guard archive.count <= maximumArchiveBytes else { throw MathNoteError.archiveTooLarge }
-        try archive.write(to: outputURL, options: [.atomic, .completeFileProtectionUnlessOpen])
+        try archive.write(to: outputURL, options: [.atomic, .completeFileProtection])
     }
 
     static func entries(in directory: URL, excludingNames: Set<String> = []) throws -> [Entry] {
+        let directory = directory.standardizedFileURL.resolvingSymlinksInPath()
         let fileManager = FileManager.default
         guard let enumerator = fileManager.enumerator(
             at: directory,
@@ -93,7 +94,7 @@ enum StoredZIPWriter {
             try Task.checkCancellation()
             let values = try url.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey])
             guard values.isRegularFile == true, !excludingNames.contains(url.lastPathComponent) else { continue }
-            let path = String(url.path.dropFirst(directory.path.count + 1))
+            let path = try StorageRelativePath.path(of: url, under: directory)
             guard !path.lowercased().contains("providerkeys"), !path.contains("..") else { continue }
             result.append(
                 Entry(

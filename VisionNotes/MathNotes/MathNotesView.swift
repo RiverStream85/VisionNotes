@@ -26,14 +26,16 @@ struct MathNotesView: View {
     private var dialogLayer: some View {
         importLayer
             .confirmationDialog(
-                "Upload \(viewModel.draftPages.count) pages for Academic OCR?",
+                "Process \(viewModel.draftPages.count) pages on this iPhone?",
                 isPresented: $confirmsUpload,
                 titleVisibility: .visible
             ) {
-                Button("Upload and process") { viewModel.startConversion() }
+                Button("Process on this iPhone") {
+                    viewModel.startConversion()
+                }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Pages are sent directly from this iPhone to Mistral for base OCR and SiliconFlow for mathematical correction. Results and evidence are cached locally.")
+                Text("Processing starts on this device and uploads nothing. If the local reconstruction package is unavailable or cannot finish, the saved job pauses before offering a separately confirmed cloud fallback.")
             }
             .alert("Delete all Academic jobs?", isPresented: $confirmsDeleteAll) {
                 Button("Delete all", role: .destructive) { viewModel.deleteAll() }
@@ -60,7 +62,15 @@ struct MathNotesView: View {
             )
             .fullScreenCover(isPresented: $showsScanner, content: scannerContent)
             .onChange(of: photoItems) { _, items in loadPhotoItems(items) }
-            .task { await viewModel.loadJobs() }
+            .task {
+                viewModel.refreshCloudCredentialStatus()
+                await viewModel.loadJobs()
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(for: .visionNotesWillSuspendPlaintext)
+            ) { _ in
+                viewModel.suspendForProtectedLifecycle()
+            }
     }
 
     private var navigationLayer: some View {
@@ -116,6 +126,7 @@ struct MathNotesView: View {
         List {
             newDocumentSection
             savedJobsSection
+            credentialsSection
             privacySection
         }
     }
@@ -146,12 +157,12 @@ struct MathNotesView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(viewModel.isWorking)
-                .accessibilityHint("Shows a network upload confirmation before processing")
+                .accessibilityHint("Starts a local-only reconstruction attempt")
             }
         } header: {
             Text("New Academic document")
         } footer: {
-            Text("Drag with Edit to reorder. Rotate or swipe to delete before upload. The normalized pages saved here remain untouched by later OCR enhancement.")
+            Text("Drag with Edit to reorder. Rotate or swipe to delete before processing. The normalized pages saved here remain untouched by later reconstruction.")
         }
     }
 
@@ -180,15 +191,72 @@ struct MathNotesView: View {
 
     private var privacySection: some View {
         Section {
-            Label("Academic OCR uploads confirmed pages to Mistral and SiliconFlow.", systemImage: "network")
-            Text("The ordinary Import tab remains fully on-device. Academic jobs and exports stay in the app until you share them. Provider keys bundled for this development build can be extracted from the app; quotas and provider privacy terms apply.")
+            Label("Academic jobs begin with on-device reconstruction.", systemImage: "iphone.gen3")
+            Text("Your notes and local model are encrypted on this iPhone. Pages are sent to cloud providers only after you choose cloud fallback and confirm the upload.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            Text("First use downloads about 1.8 GB of model files over Wi-Fi. This does not upload your pages. Once setup finishes, local reconstruction can be attempted offline.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         } header: {
             Text("Privacy and renderer")
         } footer: {
-            Text("Semantic PDF: on-device HTML + MathML through WebKit, not XeLaTeX. The separate .tex file is editable and XeLaTeX-compatible.")
+            Text("PDF: on-device HTML + MathML through WebKit, not XeLaTeX. The separate .tex file is editable XeLaTeX-oriented source.")
         }
+    }
+
+    private var credentialsSection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Mistral API key").font(.headline)
+                SecureField("Enter a new Mistral key", text: $viewModel.mistralCredentialDraft)
+                    .textContentType(.password)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                HStack {
+                    credentialStatus(saved: viewModel.hasMistralCredential)
+                    Spacer()
+                    Button("Save") { viewModel.saveMistralCredential() }
+                        .disabled(viewModel.mistralCredentialDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    if viewModel.hasMistralCredential {
+                        Button("Remove", role: .destructive) { viewModel.removeMistralCredential() }
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Qwen3-VL / SiliconFlow API key").font(.headline)
+                SecureField("Enter a new SiliconFlow key", text: $viewModel.qwen3VLCredentialDraft)
+                    .textContentType(.password)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                HStack {
+                    credentialStatus(saved: viewModel.hasQwen3VLCredential)
+                    Spacer()
+                    Button("Save") { viewModel.saveQwen3VLCredential() }
+                        .disabled(viewModel.qwen3VLCredentialDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    if viewModel.hasQwen3VLCredential {
+                        Button("Remove", role: .destructive) { viewModel.removeQwen3VLCredential() }
+                    }
+                }
+            }
+
+            if let message = viewModel.credentialStatusMessage {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Cloud fallback keys")
+        } footer: {
+            Text("Bring your own keys. Saved values are never shown again and are consulted only after local Firebird failure plus a separate per-job upload confirmation.")
+        }
+    }
+
+    private func credentialStatus(saved: Bool) -> some View {
+        Label(saved ? "Saved on this device" : "Not saved", systemImage: saved ? "checkmark.shield" : "key")
+            .font(.caption)
+            .foregroundStyle(saved ? .green : .secondary)
     }
 
     private var sourceButtons: some View {
@@ -273,7 +341,11 @@ struct MathNotesView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
             if job.stage != .complete && job.stage != .failed && job.stage != .cancelled {
-                ProgressView(value: job.displayedProgress)
+                if job.stage == .refining {
+                    ProgressView()
+                } else {
+                    ProgressView(value: job.displayedProgress)
+                }
                 if let detail = job.stageDetail {
                     Text(detail)
                         .font(.caption2)
@@ -313,6 +385,7 @@ private struct MathNoteJobDetailView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var mode = DetailMode.preview
     @State private var confirmsDelete = false
+    @State private var confirmsCloudFallback = false
 
     enum DetailMode: String, CaseIterable, Identifiable {
         case preview = "Compare"
@@ -338,7 +411,7 @@ private struct MathNoteJobDetailView: View {
                                 viewModel.isWorking ||
                                 viewModel.selectedSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                             )
-                            Text("Rebuilds the semantic PDF, LaTeX, HTML and ZIP from the saved source without contacting OCR providers.")
+                            Text("Rebuilds the WebKit PDF, LaTeX, HTML and ZIP from the saved source without contacting OCR providers.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
 
@@ -347,10 +420,14 @@ private struct MathNoteJobDetailView: View {
                             }
                             .pickerStyle(.segmented)
 
-                            if mode == .preview { comparison(job) }
+                            if viewModel.selectedJobDirectory == nil && viewModel.isWorking {
+                                ProgressView("Opening saved result…")
+                            } else if mode == .preview { comparison(job) }
                             else { sourceEditor(job) }
 
                             exportActions(job)
+                        } else if job.stage == .awaitingCloudConsent, !viewModel.isWorking {
+                            cloudFallbackActions(job)
                         } else if !viewModel.isWorking {
                             Button {
                                 viewModel.resume(job)
@@ -380,11 +457,27 @@ private struct MathNoteJobDetailView: View {
                 } message: {
                     Text("This removes the source pages, evidence and exports from the app.")
                 }
+                .confirmationDialog(
+                    "Use cloud fallback for this job?",
+                    isPresented: $confirmsCloudFallback,
+                    titleVisibility: .visible
+                ) {
+                    Button("Upload and resume") { viewModel.useCloudFallback(job) }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("The complete rasterized PDF is sent to Mistral OCR. Each page overview and high-resolution crop is sent in a separate request to Qwen3-VL through SiliconFlow. A final Qwen3-VL request receives those transcripts with Mistral-derived text for merging. This one-shot authorization is consumed before upload; provider privacy, retention, and quota terms apply.")
+                }
             } else {
                 ProgressView("Opening saved job…")
             }
         }
         .task(id: jobID) { await viewModel.selectJob(jobID) }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .visionNotesDidResumePlaintext)
+        ) { _ in
+            Task { await viewModel.selectJob(jobID) }
+        }
+        .onDisappear { viewModel.releaseMaterializedPreview(for: jobID) }
     }
 
     private func statusCard(_ job: MathNoteJobManifest) -> some View {
@@ -397,13 +490,15 @@ private struct MathNoteJobDetailView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            if viewModel.activeJobID == job.id && viewModel.isWorking {
+            if job.stage != .complete && viewModel.activeJobID == job.id && viewModel.isWorking {
                 ProgressView(value: job.displayedProgress)
                 HStack {
                     Text(job.stageDetail ?? "Working…")
                     Spacer()
-                    Text("\(Int((job.displayedProgress * 100).rounded()))%")
-                        .monospacedDigit()
+                    if job.stage != .refining {
+                        Text("\(Int((job.displayedProgress * 100).rounded()))%")
+                            .monospacedDigit()
+                    }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -411,6 +506,10 @@ private struct MathNoteJobDetailView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Button("Cancel and keep progress", role: .cancel) { viewModel.cancel() }
+            } else if job.stage == .awaitingCloudConsent {
+                Text("Local reconstruction stopped. Any completed checkpoints were preserved and nothing was uploaded; choose a local retry or review the cloud disclosure below.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             } else if job.stage != .complete {
                 Text("This job is paused. Resume uses every completed local checkpoint.")
                     .font(.caption)
@@ -431,15 +530,41 @@ private struct MathNoteJobDetailView: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
     }
 
+    private func cloudFallbackActions(_ job: MathNoteJobManifest) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                viewModel.resume(job)
+            } label: {
+                Label("Retry on this iPhone", systemImage: "arrow.clockwise")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+
+            Button {
+                confirmsCloudFallback = true
+            } label: {
+                Label("Use cloud fallback…", systemImage: "icloud.and.arrow.up")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+
+            if !viewModel.hasMistralCredential || !viewModel.hasQwen3VLCredential {
+                Text("Save both bring-your-own cloud keys in the Academic screen before using the fallback.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
     @ViewBuilder
     private func comparison(_ job: MathNoteJobManifest) -> some View {
         let sourcePages = viewModel.sourcePageURLs()
-        let semanticURL = viewModel.artifactURL(job.artifacts.pdf)
+        let renderedURL = viewModel.artifactURL(job.artifacts.pdf)
         if horizontalSizeClass == .regular {
             HStack(alignment: .top, spacing: 14) {
                 SourcePagesPreview(urls: sourcePages)
                     .frame(maxWidth: .infinity)
-                SemanticPDFPreview(url: semanticURL)
+                WebKitPDFPreview(url: renderedURL)
                     .frame(maxWidth: .infinity)
             }
             .frame(minHeight: 640)
@@ -449,9 +574,9 @@ private struct MathNoteJobDetailView: View {
                     .font(.headline)
                 SourcePagesPreview(urls: sourcePages)
                     .frame(height: 390)
-                Label("Semantic reconstruction", systemImage: "doc.richtext")
+                Label("WebKit reconstruction", systemImage: "doc.richtext")
                     .font(.headline)
-                SemanticPDFPreview(url: semanticURL)
+                WebKitPDFPreview(url: renderedURL)
                     .frame(height: 520)
             }
         }
@@ -463,7 +588,7 @@ private struct MathNoteJobDetailView: View {
                 .font(.headline)
             TextEditor(text: Binding(
                 get: { viewModel.selectedSource },
-                set: viewModel.setSelectedSource
+                set: { value in viewModel.setSelectedSource(value) }
             ))
             .font(.system(.body, design: .monospaced))
             .frame(minHeight: 480)
@@ -480,7 +605,7 @@ private struct MathNoteJobDetailView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(viewModel.isWorking || viewModel.selectedSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            Text("Recompile rebuilds HTML, semantic PDF, TeX and ZIP without contacting either OCR provider. Previous edits are retained in the job archive.")
+            Text("Recompile rebuilds Markdown, LaTeX, HTML, both PDFs and ZIP locally. Previous edits are retained in the encrypted job archive.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -490,17 +615,17 @@ private struct MathNoteJobDetailView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Share or Save").font(.headline)
             HStack {
-                exportLink("Semantic PDF", image: "doc.richtext", path: job.artifacts.pdf)
+                exportLink("WebKit PDF", image: "doc.richtext", path: job.artifacts.pdf)
                 exportLink("LaTeX", image: "function", path: job.artifacts.latex)
             }
             HStack {
                 exportLink("Offline HTML", image: "safari", path: job.artifacts.html)
-                exportLink("All files ZIP", image: "archivebox", path: job.artifacts.archive)
             }
             HStack {
                 exportLink("Markdown", image: "text.document", path: job.artifacts.markdown)
                 exportLink("Facsimile PDF", image: "photo.on.rectangle", path: job.artifacts.facsimilePDF)
             }
+            exportLink("All files ZIP", image: "archivebox", path: job.artifacts.archive)
         }
     }
 
@@ -518,6 +643,7 @@ private struct MathNoteJobDetailView: View {
     private func statusIcon(_ stage: MathNoteStage) -> String {
         switch stage {
         case .complete: "checkmark.circle.fill"
+        case .awaitingCloudConsent: "icloud.and.arrow.up"
         case .failed: "exclamationmark.triangle.fill"
         case .cancelled: "pause.circle.fill"
         default: "clock.arrow.circlepath"
@@ -535,7 +661,8 @@ private struct SourcePagesPreview: View {
             TabView {
                 ForEach(Array(urls.enumerated()), id: \.offset) { index, url in
                     Group {
-                        if let image = UIImage(contentsOfFile: url.path) {
+                        if let data = try? Data(contentsOf: url, options: []),
+                           let image = UIImage(data: data) {
                             Image(uiImage: image)
                                 .resizable()
                                 .scaledToFit()
@@ -553,7 +680,7 @@ private struct SourcePagesPreview: View {
     }
 }
 
-private struct SemanticPDFPreview: UIViewRepresentable {
+private struct WebKitPDFPreview: UIViewRepresentable {
     let url: URL?
 
     func makeUIView(context: Context) -> PDFView {
@@ -562,11 +689,49 @@ private struct SemanticPDFPreview: UIViewRepresentable {
         view.displayMode = .singlePageContinuous
         view.displayDirection = .vertical
         view.backgroundColor = .secondarySystemBackground
+        context.coordinator.observe(view)
         return view
     }
 
     func updateUIView(_ view: PDFView, context: Context) {
         guard let url else { view.document = nil; return }
-        view.document = PDFDocument(url: url)
+        if view.document?.documentURL != url {
+            view.document = PDFDocument(url: url)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    static func dismantleUIView(_ uiView: PDFView, coordinator: Coordinator) {
+        coordinator.stopObserving()
+        uiView.document = nil
+    }
+
+    final class Coordinator {
+        private var suspensionObserver: NSObjectProtocol?
+
+        deinit {
+            stopObserving()
+        }
+
+        func observe(_ view: PDFView) {
+            stopObserving()
+            suspensionObserver = NotificationCenter.default.addObserver(
+                forName: .visionNotesWillSuspendPlaintext,
+                object: nil,
+                queue: .main
+            ) { [weak view] _ in
+                view?.document = nil
+            }
+        }
+
+        func stopObserving() {
+            if let suspensionObserver {
+                NotificationCenter.default.removeObserver(suspensionObserver)
+                self.suspensionObserver = nil
+            }
+        }
     }
 }

@@ -10,6 +10,8 @@ VisionNotes/Resources/ProviderKeys.plist
 DerivedData/
 build/
 .build/
+.swiftpm/
+work/
 *.xcuserstate
 xcuserdata/
 **/xcuserdata/

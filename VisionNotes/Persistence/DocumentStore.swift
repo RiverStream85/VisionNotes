@@ -9,6 +9,7 @@ import SwiftData
 struct DocumentStore {
     let modelContext: ModelContext
     let storage: FileStorageServicing
+    private let migrationState = LegacyContentMigrationState()
 
     init(modelContext: ModelContext, storage: FileStorageServicing = FileStorageService.shared) {
         self.modelContext = modelContext
@@ -22,8 +23,10 @@ struct DocumentStore {
             sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
         )
         do {
+            try migrateLegacyContent()
             return try modelContext.fetch(descriptor)
         } catch {
+            if error is EncryptedTextCodecError { throw error }
             throw AppError.persistenceSaveFailed(reason: error.localizedDescription)
         }
     }
@@ -34,8 +37,10 @@ struct DocumentStore {
         )
         descriptor.fetchLimit = 1
         do {
+            try migrateLegacyContent()
             return try modelContext.fetch(descriptor).first
         } catch {
+            if error is EncryptedTextCodecError { throw error }
             throw AppError.persistenceSaveFailed(reason: error.localizedDescription)
         }
     }
@@ -49,14 +54,14 @@ struct DocumentStore {
         try allDocuments().map { document in
             SearchDocumentSnapshot(
                 id: document.id,
-                title: document.title,
+                title: try document.title,
                 documentType: document.documentType,
                 updatedAt: document.updatedAt,
-                pages: document.sortedPages.map { page in
+                pages: try document.sortedPages.map { page in
                     SearchPageSnapshot(
                         id: page.id,
                         pageNumber: page.pageNumber,
-                        text: page.recognizedText
+                        text: try page.decryptedRecognizedText()
                     )
                 }
             )
@@ -68,15 +73,44 @@ struct DocumentStore {
     func rename(_ document: LibraryDocument, to title: String) throws {
         let cleaned = FileNameGenerator.sanitizedTitle(title)
         guard !cleaned.isEmpty else { return }
-        document.title = cleaned
+        try document.setTitle(cleaned)
         document.updatedAt = Date()
         try save()
     }
 
     func updateRecognizedText(_ text: String, on page: DocumentPage) throws {
-        page.recognizedText = text
+        try page.setRecognizedText(text)
         page.document?.updatedAt = Date()
         try save()
+    }
+
+    /// Migrates the original plaintext SwiftData columns in place. Each value
+    /// is encrypted and reopened successfully before its legacy column is
+    /// cleared, and a single SwiftData save commits the batch.
+    func migrateLegacyContent() throws {
+        guard !migrationState.isComplete else { return }
+        let documents: [LibraryDocument]
+        let pages: [DocumentPage]
+        let blocks: [TextBlock]
+        do {
+            documents = try modelContext.fetch(FetchDescriptor<LibraryDocument>())
+            // Fetch child entities independently so any rows orphaned by an
+            // older SwiftData cascade bug do not leave plaintext behind.
+            pages = try modelContext.fetch(FetchDescriptor<DocumentPage>(
+                predicate: #Predicate {
+                    $0.recognizedTextCiphertext == nil || $0.legacyRecognizedText != ""
+                }
+            ))
+            blocks = try modelContext.fetch(FetchDescriptor<TextBlock>(
+                predicate: #Predicate {
+                    $0.textCiphertext == nil || $0.legacyText != ""
+                }
+            ))
+        } catch {
+            throw AppError.persistenceSaveFailed(reason: error.localizedDescription)
+        }
+        try migrateLegacyContent(documents: documents, pages: pages, blocks: blocks)
+        migrationState.isComplete = true
     }
 
     /// Removes a document, its pages, its text blocks and every local file.
@@ -115,11 +149,37 @@ struct DocumentStore {
     }
 
     func save() throws {
+        try migrateLegacyContent()
+        try persistChanges()
+    }
+
+    private func persistChanges() throws {
         guard modelContext.hasChanges else { return }
         do {
             try modelContext.save()
         } catch {
             throw AppError.persistenceSaveFailed(reason: error.localizedDescription)
+        }
+    }
+
+    private func migrateLegacyContent(
+        documents: [LibraryDocument],
+        pages: [DocumentPage],
+        blocks: [TextBlock]
+    ) throws {
+        var changed = false
+        for document in documents {
+            changed = try document.migrateLegacyMetadataIfNeeded() || changed
+            changed = try document.migrateLegacyThumbnailIfNeeded() || changed
+        }
+        for page in pages {
+            changed = try page.migrateLegacyRecognizedTextIfNeeded() || changed
+        }
+        for block in blocks {
+            changed = try block.migrateLegacyTextIfNeeded() || changed
+        }
+        if changed {
+            try persistChanges()
         }
     }
 
@@ -133,4 +193,9 @@ struct DocumentStore {
             storage.deleteIgnoringMissing(fileName: page.imageFileName, in: pageDirectory)
         }
     }
+}
+
+@MainActor
+private final class LegacyContentMigrationState {
+    var isComplete = false
 }

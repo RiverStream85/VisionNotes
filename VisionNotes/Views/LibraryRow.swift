@@ -5,10 +5,10 @@ struct LibraryRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            DocumentThumbnail(data: document.thumbnailData, type: document.documentType)
+            thumbnail
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(document.title)
+                Text(((try? document.title) ?? "Note unavailable"))
                     .font(.headline)
                     .lineLimit(2)
 
@@ -33,16 +33,21 @@ struct LibraryRow: View {
                         .foregroundStyle(.red)
                         .lineLimit(2)
                 } else {
-                    let preview = document.textPreview()
-                    if preview.isEmpty {
+                    switch Result(catching: { try document.textPreview() }) {
+                    case .success(let preview) where !preview.isEmpty:
+                        Text(preview)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    case .success:
                         Text(document.processingStatus == .completed ? "No text recognized." : "Waiting for text recognition…")
                             .font(.subheadline)
                             .foregroundStyle(.tertiary)
                             .lineLimit(1)
-                    } else {
-                        Text(preview)
+                    case .failure:
+                        Label("Encrypted text unavailable", systemImage: "exclamationmark.lock")
                             .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.red)
                             .lineLimit(2)
                     }
                 }
@@ -54,5 +59,20 @@ struct LibraryRow: View {
 
     private var pageCountText: String {
         document.pageCount == 1 ? "1 page" : "\(document.pageCount) pages"
+    }
+
+    @ViewBuilder
+    private var thumbnail: some View {
+        switch Result(catching: { try document.decryptedThumbnailData() }) {
+        case .success(let data):
+            DocumentThumbnail(data: data, type: document.documentType)
+        case .failure:
+            Image(systemName: "exclamationmark.lock")
+                .frame(width: 58, height: 72)
+                .background(Color(.secondarySystemBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .foregroundStyle(.red)
+                .accessibilityLabel("Encrypted thumbnail unavailable")
+        }
     }
 }

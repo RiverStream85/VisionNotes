@@ -25,6 +25,17 @@ private final class MockTextRecognitionService: TextRecognitionService, @uncheck
 
 final class DocumentProcessingServiceTests: XCTestCase {
 
+    func testEncryptionFailureIsNotRelabeledAsOCRFailure() {
+        let source = EncryptedTextCodecError.integrityCheckFailed(field: "page-recognized-text")
+
+        let wrapped = AppError.wrap(source) { AppError.ocrRequestFailed(reason: $0) }
+
+        XCTAssertEqual(
+            wrapped,
+            .encryptedDataUnavailable(reason: source.localizedDescription)
+        )
+    }
+
     private var root: URL!
     private var containers: [ModelContainer] = []
 
@@ -108,15 +119,15 @@ final class DocumentProcessingServiceTests: XCTestCase {
 
         XCTAssertEqual(document.processingStatus, .completed)
         XCTAssertEqual(document.pageCount, 1)
-        XCTAssertEqual(document.title, "Scan")
+        XCTAssertEqual(try document.title, "Scan")
         XCTAssertEqual(document.documentType, .photo)
-        XCTAssertNotNil(document.thumbnailData)
+        XCTAssertNotNil(try document.decryptedThumbnailData())
         XCTAssertTrue(storage.fileExists(document.localFileName, in: .sources))
         XCTAssertTrue(reportedStages.contains(.complete))
 
         let page = try XCTUnwrap(document.sortedPages.first)
-        XCTAssertEqual(page.recognizedText, "first line\nsecond line")
-        XCTAssertEqual(page.sortedTextBlocks.map(\.text), ["first line", "second line"])
+        XCTAssertEqual(try page.decryptedRecognizedText(), "first line\nsecond line")
+        XCTAssertEqual(try page.sortedTextBlocks.map { try $0.decryptedText() }, ["first line", "second line"])
         XCTAssertEqual(page.sortedTextBlocks.map(\.readingOrder), [0, 1])
         XCTAssertEqual(recognizer.callCount, 1)
     }
@@ -160,7 +171,7 @@ final class DocumentProcessingServiceTests: XCTestCase {
 
         let document = try await service.importImage(data: try sampleImageData(), type: .photo)
         let page = try XCTUnwrap(document.sortedPages.first)
-        page.recognizedText = "hand edited"
+        try page.setRecognizedText("hand edited")
         try context.save()
 
         recognizer.blocksToReturn = [
@@ -173,8 +184,8 @@ final class DocumentProcessingServiceTests: XCTestCase {
         try await service.reprocess(document)
 
         let reloaded = try XCTUnwrap(document.sortedPages.first)
-        XCTAssertEqual(reloaded.recognizedText, "fresh result")
-        XCTAssertEqual(reloaded.sortedTextBlocks.map(\.text), ["fresh result"])
+        XCTAssertEqual(try reloaded.decryptedRecognizedText(), "fresh result")
+        XCTAssertEqual(try reloaded.sortedTextBlocks.map { try $0.decryptedText() }, ["fresh result"])
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<TextBlock>()), 1, "Old blocks must not linger")
     }
 
@@ -211,12 +222,12 @@ final class DocumentProcessingServiceTests: XCTestCase {
         XCTAssertEqual(document.sortedPages.map(\.pageNumber), [1, 2, 3])
         XCTAssertEqual(recognizer.callCount, 3, "Every page must be recognized exactly once")
         XCTAssertEqual(lastProgress, 1, accuracy: 0.0001)
-        XCTAssertNotNil(document.thumbnailData)
+        XCTAssertNotNil(try document.decryptedThumbnailData())
 
         for page in document.sortedPages {
             let fileName = try XCTUnwrap(page.imageFileName)
             XCTAssertTrue(storage.fileExists(fileName, in: .pages), "Page \(page.pageNumber) cache image missing")
-            XCTAssertEqual(page.recognizedText, "first line\nsecond line")
+            XCTAssertEqual(try page.decryptedRecognizedText(), "first line\nsecond line")
         }
     }
 
@@ -266,7 +277,7 @@ final class DocumentProcessingServiceTests: XCTestCase {
             XCTAssertEqual(document.processingStatus, .completed)
             XCTAssertTrue(storage.fileExists(document.localFileName, in: .sources))
             for page in document.sortedPages {
-                XCTAssertFalse(page.recognizedText.isEmpty, "Demo pages ship with text already recognized")
+                XCTAssertFalse(try page.decryptedRecognizedText().isEmpty, "Demo pages ship with text already recognized")
                 XCTAssertFalse(page.textBlocks.isEmpty, "Demo pages ship with bounding boxes")
             }
         }

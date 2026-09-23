@@ -1,9 +1,93 @@
+import CryptoKit
+import Foundation
+import Observation
 import PDFKit
 import UIKit
 import XCTest
 @testable import VisionNotes
 
 final class AcademicOCRTests: XCTestCase {
+    func testLocalFencedEquationsRenderAsMathInsteadOfSourceCode() throws {
+        let generated = ["```latex", #"\begin{align*}"#, #"a &= b \\"#, "c &= d", #"\end{align*}"#, "```"].joined(separator: "\n")
+        let markdown = FirebirdLocalModel.normalizeMarkdown(generated)
+        XCTAssertTrue(markdown.hasPrefix("$$\n\\begin{aligned}"))
+        XCTAssertFalse(markdown.contains("```"))
+        let html = try AcademicSourceCompiler.standaloneHTML(markdown: markdown, title: "Test", assetRoot: FileManager.default.temporaryDirectory)
+        XCTAssertTrue(html.contains("<mtable>"))
+        XCTAssertTrue(html.contains("<mi>a</mi>"))
+        XCTAssertTrue(html.contains("<mi>d</mi>"))
+        let incomplete = "```latex\n\\begin{align*}\na=b"
+        XCTAssertEqual(FirebirdLocalModel.normalizeMarkdown(incomplete), incomplete)
+    }
+
+    func testExportPathsResolveContainerAliasesAndRejectEscapes() throws {
+        let parent = makeTemporaryDirectory()
+        let real = parent.appendingPathComponent("real", isDirectory: true)
+        let alias = parent.appendingPathComponent("alias", isDirectory: true)
+        let page = real.appendingPathComponent("pages/page-001.jpg")
+        try FileManager.default.createDirectory(at: page.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data([1, 2, 3]).write(to: page)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: real)
+        XCTAssertEqual(try StorageRelativePath.path(of: page, under: alias), "pages/page-001.jpg")
+        XCTAssertEqual(try StoredZIPWriter.entries(in: alias).map(\.path), ["pages/page-001.jpg"])
+        XCTAssertThrowsError(try StorageRelativePath.path(of: parent.appendingPathComponent("outside"), under: alias))
+    }
+
+    func testAliasedJobRootCanPrepareEncryptedExports() async throws {
+        let parent = makeTemporaryDirectory()
+        let real = parent.appendingPathComponent("jobs", isDirectory: true)
+        let alias = parent.appendingPathComponent("jobs-alias", isDirectory: true)
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: real)
+        let store = MathNoteJobStore(rootURL: alias)
+        let page = Data("private source page".utf8)
+        let job = try await store.createJob(title: "Alias regression", normalizedPages: [page])
+        try await store.write("$x=1$", relativePath: "machine-source.md", jobID: job.id)
+        let work = try await store.workingDirectory(for: job.id)
+        defer { try? FileManager.default.removeItem(at: work) }
+        XCTAssertEqual(try Data(contentsOf: work.appendingPathComponent(job.pages[0].sourcePath)), page)
+        let entries = try StoredZIPWriter.entries(in: work)
+        XCTAssertTrue(entries.contains { $0.path == "machine-source.md" })
+        try await store.absorbWorkingDirectory(work, jobID: job.id)
+        let reopened = try await store.read(relativePath: job.pages[0].sourcePath, jobID: job.id)
+        XCTAssertEqual(reopened, page)
+    }
+
+    @MainActor
+    func testCompletedJobReopensEncryptedSourcePreview() async throws {
+        let store = MathNoteJobStore(rootURL: makeTemporaryDirectory())
+        let page = Data("saved page".utf8)
+        let job = try await store.createJob(title: "Preview", normalizedPages: [page])
+        try await store.write("$x=1$", relativePath: "machine-source.md", jobID: job.id)
+        _ = try await store.update(job.id, stage: .complete)
+        let model = MathNotesViewModel(store: store)
+        await model.selectJob(job.id)
+        XCTAssertEqual(model.selectedSource, "$x=1$")
+        XCTAssertFalse(model.isWorking)
+        let url = try XCTUnwrap(model.sourcePageURLs().first)
+        XCTAssertEqual(try Data(contentsOf: url), page)
+        model.releaseMaterializedPreview(for: job.id)
+    }
+
+    @MainActor
+    func testWorkingStateNotifiesWhenTaskFinishes() async throws {
+        let store = MathNoteJobStore(rootURL: makeTemporaryDirectory())
+        let job = try await store.createJob(title: "Task state", normalizedPages: [Data("page".utf8)])
+        // A missing saved job fails before inference or any network request.
+        try await store.delete(job.id)
+        let model = MathNotesViewModel(store: store)
+        model.resume(job)
+        XCTAssertTrue(model.isWorking)
+        let finished = expectation(description: "Working state changes when task finishes")
+        withObservationTracking {
+            _ = model.isWorking
+        } onChange: {
+            finished.fulfill()
+        }
+        await fulfillment(of: [finished], timeout: 5)
+        XCTAssertFalse(model.isWorking)
+    }
+
     private var temporaryURLs: [URL] = []
 
     override func tearDownWithError() throws {
@@ -27,7 +111,9 @@ final class AcademicOCRTests: XCTestCase {
         XCTAssertEqual(mistral.request.httpMethod, "POST")
         XCTAssertEqual(mistral.request.value(forHTTPHeaderField: "Authorization"), "Bearer \(key)")
         let mistralBody = try XCTUnwrap(String(data: mistral.body, encoding: .utf8))
-        XCTAssertTrue(mistralBody.contains("data:application/pdf;base64,"))
+        let mistralJSON = try JSONSerialization.jsonObject(with: mistral.body) as! [String: Any]
+        let document = mistralJSON["document"] as! [String: Any]
+        XCTAssertTrue((document["document_url"] as? String)?.hasPrefix("data:application/pdf;base64,") == true)
         XCTAssertTrue(mistralBody.contains(MistralOCRClient.model))
         XCTAssertFalse(mistralBody.contains(key))
 
@@ -38,8 +124,12 @@ final class AcademicOCRTests: XCTestCase {
             key: key
         )
         let visionBody = try XCTUnwrap(String(data: vision.body, encoding: .utf8))
-        XCTAssertTrue(visionBody.contains("data:image/png;base64,"))
-        XCTAssertTrue(visionBody.contains(SiliconFlowVisionClient.model))
+        let visionJSON = try JSONSerialization.jsonObject(with: vision.body) as! [String: Any]
+        XCTAssertEqual(visionJSON["model"] as? String, SiliconFlowVisionClient.model)
+        let messages = visionJSON["messages"] as! [[String: Any]]
+        let content = messages.last!["content"] as! [[String: Any]]
+        let image = content.first { $0["type"] as? String == "image_url" }!["image_url"] as! [String: Any]
+        XCTAssertTrue((image["url"] as? String)?.hasPrefix("data:image/png;base64,") == true)
         XCTAssertFalse(visionBody.contains(key))
     }
 
@@ -175,15 +265,204 @@ final class AcademicOCRTests: XCTestCase {
         XCTAssertEqual(loaded.pages.map(\.index), [0, 1])
         XCTAssertEqual(loaded.pages.map(\.sourcePath), ["pages/page-001.jpg", "pages/page-002.jpg"])
         XCTAssertEqual(loaded.stage, .baseOCR)
+        XCTAssertFalse(loaded.allowsCloudFallback)
+        let persistedPage = directory
+            .appendingPathComponent(job.id.uuidString.lowercased())
+            .appendingPathComponent("pages/page-001.jpg")
+        let ciphertext = try Data(contentsOf: persistedPage)
+        XCTAssertTrue(ciphertext.starts(with: EncryptedDataVault.header))
+        XCTAssertFalse(String(decoding: ciphertext, as: UTF8.self).contains("first"))
         try await store.delete(job.id)
         await XCTAssertThrowsErrorAsync { _ = try await store.load(job.id) }
+    }
+
+    func testAwaitingConsentPurgesDecryptedJobFiles() async throws {
+        let directory = makeTemporaryDirectory()
+        let store = MathNoteJobStore(rootURL: directory)
+        let job = try await store.createJob(
+            title: "Temporary cleanup",
+            normalizedPages: [Data("page".utf8)]
+        )
+        let materialized = try await store.materializedDirectory(for: job.id)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: materialized.path))
+
+        _ = try await store.update(job.id, stage: .awaitingCloudConsent)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: materialized.path))
+        let persistedPage = try await store.read(
+            relativePath: "pages/page-001.jpg",
+            jobID: job.id
+        )
+        XCTAssertEqual(persistedPage, Data("page".utf8))
+    }
+
+    func testPreviewReleaseCannotDeleteRendererWorkOrANewerPreview() async throws {
+        let directory = makeTemporaryDirectory()
+        let store = MathNoteJobStore(rootURL: directory)
+        let job = try await store.createJob(
+            title: "Preview ownership",
+            normalizedPages: [Data("page".utf8)]
+        )
+
+        let firstPreview = try await store.materializedDirectory(for: job.id)
+        let workDirectory = try await store.workingDirectory(for: job.id)
+        let secondPreview = try await store.materializedDirectory(for: job.id)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: firstPreview.path))
+
+        await store.releaseMaterializedPreview(for: job.id, expectedURL: firstPreview)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: secondPreview.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: workDirectory.path))
+
+        await store.releaseMaterializedPreview(for: job.id, expectedURL: secondPreview)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: secondPreview.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: workDirectory.path))
+        try FileManager.default.removeItem(at: workDirectory)
+    }
+
+    func testTypedLocalFailureAwaitsConsentAndPreservesCheckpointAndError() async throws {
+        let directory = makeTemporaryDirectory()
+        let store = MathNoteJobStore(rootURL: directory)
+        let pageData = try makeBlankPageData()
+        let job = try await store.createJob(
+            title: "Consent boundary",
+            normalizedPages: [pageData, pageData]
+        )
+        let cachedPage = MathNotePageRefinement(
+            pageIndex: 0,
+            provider: "On-device",
+            model: FirebirdLocalModel.modelIdentifier,
+            overviewTranscript: "cached local evidence",
+            overviewUsage: nil,
+            crops: [],
+            mergeTranscript: "# Cached local result",
+            mergeUsage: nil,
+            finalMarkdown: "# Cached local result"
+        )
+        let cachedData = try JSONEncoder().encode(cachedPage)
+        try await store.write(
+            cachedData,
+            relativePath: "firebird-qwen3vl-9c4f5209-input-v2-page-001.json",
+            jobID: job.id
+        )
+        let renderer = RendererSpy()
+        let pipeline = MathNotePipeline(
+            store: store,
+            renderer: renderer,
+            localReconstructor: { _ in throw MathNoteError.localInferenceUnavailable }
+        )
+
+        do {
+            _ = try await pipeline.run(jobID: job.id)
+            XCTFail("Expected the local model failure to pause for consent")
+        } catch {
+            XCTAssertEqual(error as? MathNoteError, .localInferenceUnavailable)
+        }
+
+        let paused = try await store.load(job.id)
+        let preservedCheckpoint = try await store.read(
+            relativePath: "firebird-qwen3vl-9c4f5209-input-v2-page-001.json",
+            jobID: job.id
+        )
+        let cloudOCRExists = await store.exists(relativePath: "cloud-ocr.json", jobID: job.id)
+        let renderCount = await renderer.renderCount
+        XCTAssertEqual(paused.stage, .awaitingCloudConsent)
+        XCTAssertFalse(paused.allowsCloudFallback)
+        XCTAssertEqual(paused.failureMessage, MathNoteError.localInferenceUnavailable.localizedDescription)
+        XCTAssertEqual(paused.stageDetail, "Local state saved · nothing uploaded")
+        XCTAssertEqual(preservedCheckpoint, cachedData)
+        XCTAssertFalse(cloudOCRExists)
+        XCTAssertEqual(renderCount, 0)
+    }
+
+    func testNonAvailabilityLocalErrorRemainsFailedAndCannotRequestCloudConsent() async throws {
+        let directory = makeTemporaryDirectory()
+        let store = MathNoteJobStore(rootURL: directory)
+        let job = try await store.createJob(
+            title: "Integrity boundary",
+            normalizedPages: [try makeBlankPageData()]
+        )
+        let pipeline = MathNotePipeline(
+            store: store,
+            renderer: RendererSpy(),
+            localReconstructor: { _ in throw MathNoteError.invalidImage }
+        )
+
+        await XCTAssertThrowsErrorAsync { _ = try await pipeline.run(jobID: job.id) }
+
+        let failed = try await store.load(job.id)
+        let cloudOCRExists = await store.exists(relativePath: "cloud-ocr.json", jobID: job.id)
+        XCTAssertEqual(failed.stage, .failed)
+        XCTAssertNotEqual(failed.stage, .awaitingCloudConsent)
+        XCTAssertFalse(failed.allowsCloudFallback)
+        XCTAssertFalse(cloudOCRExists)
+    }
+
+    func testCloudFallbackAuthorizationIsOneShot() async throws {
+        let directory = makeTemporaryDirectory()
+        let store = MathNoteJobStore(rootURL: directory)
+        let job = try await store.createJob(
+            title: "One-shot cloud authorization",
+            normalizedPages: [Data("page".utf8)]
+        )
+
+        _ = try await store.setCloudFallbackConsent(job.id, allowed: true)
+        let consumed = try await store.consumeCloudFallbackConsent(job.id)
+
+        XCTAssertFalse(consumed.allowsCloudFallback)
+        await XCTAssertThrowsErrorAsync {
+            _ = try await store.consumeCloudFallbackConsent(job.id)
+        }
+    }
+
+    func testPersistedFlagAloneCannotAuthorizeAnUpload() async throws {
+        let directory = makeTemporaryDirectory()
+        let store = MathNoteJobStore(rootURL: directory)
+        let job = try await store.createJob(
+            title: "Stale authorization",
+            normalizedPages: [try makeBlankPageData()]
+        )
+        _ = try await store.setCloudFallbackConsent(job.id, allowed: true)
+        let pipeline = MathNotePipeline(
+            store: store,
+            renderer: RendererSpy(),
+            localReconstructor: { _ in throw MathNoteError.localInferenceUnavailable }
+        )
+
+        await XCTAssertThrowsErrorAsync { _ = try await pipeline.run(jobID: job.id) }
+
+        let paused = try await store.load(job.id)
+        let cloudOCRExists = await store.exists(relativePath: "cloud-ocr.json", jobID: job.id)
+        XCTAssertEqual(paused.stage, .awaitingCloudConsent)
+        XCTAssertFalse(paused.allowsCloudFallback)
+        XCTAssertFalse(cloudOCRExists)
+    }
+
+    func testCancelledRetryClearsUnusedCloudAuthorization() async throws {
+        let directory = makeTemporaryDirectory()
+        let store = MathNoteJobStore(rootURL: directory)
+        let job = try await store.createJob(
+            title: "Cancelled authorization",
+            normalizedPages: [try makeBlankPageData()]
+        )
+        _ = try await store.setCloudFallbackConsent(job.id, allowed: true)
+        let pipeline = MathNotePipeline(
+            store: store,
+            renderer: RendererSpy(),
+            localReconstructor: { _ in throw CancellationError() }
+        )
+
+        await XCTAssertThrowsErrorAsync { _ = try await pipeline.run(jobID: job.id) }
+
+        let cancelled = try await store.load(job.id)
+        XCTAssertEqual(cancelled.stage, .cancelled)
+        XCTAssertFalse(cancelled.allowsCloudFallback)
     }
 
     func testCachedRebuildUsesOnlyLocalRendererAndProducesArchive() async throws {
         let directory = makeTemporaryDirectory()
         let store = MathNoteJobStore(rootURL: directory)
         let renderer = RendererSpy()
-        let pipeline = MathNotePipeline(store: store, renderer: renderer, bundle: .main)
+        let pipeline = MathNotePipeline(store: store, renderer: renderer)
         let job = try await store.createJob(title: "Cached", normalizedPages: [Data("page".utf8)])
         try await store.write("# Cached\n\n$x^2$", relativePath: "edited-source.md", jobID: job.id)
 
@@ -215,17 +494,25 @@ final class AcademicOCRTests: XCTestCase {
         XCTAssertFalse(text.lowercased().contains("providerkeys"))
     }
 
-    func testExactlyOneProviderKeyResourceExistsInBundle() throws {
+    func testProviderKeysAreNotBundledAsPlistResources() throws {
         let resources = Bundle.main.urls(forResourcesWithExtension: "plist", subdirectory: nil) ?? []
         let providerResources = resources.filter { $0.lastPathComponent == "ProviderKeys.plist" }
-        XCTAssertEqual(providerResources.count, 1)
+        XCTAssertTrue(providerResources.isEmpty)
+    }
 
-        let data = try Data(contentsOf: XCTUnwrap(providerResources.first))
-        let plist = try XCTUnwrap(
-            PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
-        )
-        XCTAssertNotNil(plist["MistralAPIKey"] as? String)
-        XCTAssertNotNil(plist["SiliconFlowAPIKey"] as? String)
+    func testAESGCMVaultAuthenticatesPathAndRejectsTampering() throws {
+        let key = SymmetricKey(data: Data(repeating: 0x4f, count: 32))
+        let vault = EncryptedDataVault(keyProvider: { key })
+        let plaintext = Data("private theorem notes".utf8)
+        let sealed = try vault.seal(plaintext, context: "notes/a")
+
+        XCTAssertTrue(sealed.starts(with: EncryptedDataVault.header))
+        XCTAssertEqual(try vault.open(sealed, context: "notes/a"), plaintext)
+        XCTAssertThrowsError(try vault.open(sealed, context: "notes/b"))
+
+        var tampered = sealed
+        tampered[tampered.index(before: tampered.endIndex)] ^= 0x01
+        XCTAssertThrowsError(try vault.open(tampered, context: "notes/a"))
     }
 
     func testNormalizationPreservesOrientationAndFacsimilePageCount() async throws {
@@ -235,7 +522,9 @@ final class AcademicOCRTests: XCTestCase {
             UIColor.white.setFill()
             context.fill(CGRect(x: 0, y: 0, width: 200, height: 300))
             UIColor.black.setStroke()
-            context.cgContext.stroke(CGRect(x: 20, y: 20, width: 160, height: 260))
+            context.cgContext.move(to: CGPoint(x: 20, y: 20))
+            context.cgContext.addLine(to: CGPoint(x: 180, y: 280))
+            context.cgContext.strokePath()
         }
         let encoded = try XCTUnwrap(source.jpegData(compressionQuality: 1))
         let normalized = try await MathImagePreprocessor.normalizeSource(encoded)
@@ -268,6 +557,7 @@ final class AcademicOCRTests: XCTestCase {
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         object.removeValue(forKey: "stageProgress")
         object.removeValue(forKey: "stageDetail")
+        object.removeValue(forKey: "cloudFallbackAllowed")
         let legacyData = try JSONSerialization.data(withJSONObject: object)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -280,7 +570,7 @@ final class AcademicOCRTests: XCTestCase {
     }
 
     @MainActor
-    func testWebKitRendererProducesSemanticPDFForOfflineMathFixture() async throws {
+    func testWebKitRendererProducesOfflinePDFFromMathFixture() async throws {
         let directory = makeTemporaryDirectory()
         let pagesDirectory = directory.appendingPathComponent("pages", isDirectory: true)
         let assetsDirectory = directory.appendingPathComponent("assets", isDirectory: true)
@@ -319,11 +609,22 @@ final class AcademicOCRTests: XCTestCase {
         )
 
         let pdfURL = directory.appendingPathComponent(manifest.artifacts.pdf)
+        let markdownURL = directory.appendingPathComponent(manifest.artifacts.markdown)
+        let latexURL = directory.appendingPathComponent(manifest.artifacts.latex)
+        let htmlURL = directory.appendingPathComponent(manifest.artifacts.html)
         let archiveURL = directory.appendingPathComponent(manifest.artifacts.archive)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: markdownURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: latexURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: htmlURL.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: pdfURL.path))
         XCTAssertGreaterThan(try Data(contentsOf: pdfURL).count, 1_000)
         XCTAssertGreaterThan(PDFDocument(url: pdfURL)?.pageCount ?? 0, 0)
         XCTAssertTrue(FileManager.default.fileExists(atPath: archiveURL.path))
+        let html = try String(contentsOf: htmlURL, encoding: .utf8)
+        XCTAssertTrue(html.contains("<math "))
+        XCTAssertTrue(html.contains("<mfrac>"))
+        let archive = String(decoding: try Data(contentsOf: archiveURL), as: UTF8.self)
+        XCTAssertTrue(archive.contains(manifest.artifacts.html))
     }
 
     private func makeTemporaryDirectory() -> URL {
@@ -332,6 +633,16 @@ final class AcademicOCRTests: XCTestCase {
         try! FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         temporaryURLs.append(url)
         return url
+    }
+
+    private func makeBlankPageData() throws -> Data {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 120, height: 160), format: format).image { context in
+            UIColor.white.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 120, height: 160))
+        }
+        return try XCTUnwrap(image.jpegData(compressionQuality: 0.9))
     }
 }
 

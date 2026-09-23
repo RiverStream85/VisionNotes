@@ -1,37 +1,36 @@
-# Vision Notes Academic OCR
+# Academic implementation
 
-The Academic tab converts photographed mathematical notes into editable Markdown and LaTeX source, an offline standalone HTML document, a searchable semantic PDF with a conditional in-document Contents section when Markdown headings are present, a source-page facsimile, provider evidence JSON, extracted figures, and an artifact ZIP.
+Scan/import, source editing, comparison and the existing Academic exports remain unchanged. Firebird is the local runtime module, using the pinned Apache-2.0 Qwen3-VL-2B-Instruct 4-bit checkpoint; it is not a separately trained model.
 
-## Local key setup
+## Request path
 
-The repository tracks `VisionNotes/Resources/ProviderKeys.example.plist` with empty values. Copy it to `VisionNotes/Resources/ProviderKeys.plist` and add local `MistralAPIKey` and `SiliconFlowAPIKey` values there. The real file is ignored by Git.
+1. Seal normalized pages in the job store.
+2. On first setup, fetch the pinned model/tokenizer assets over Wi-Fi without sending page content. Stream directly into AES-GCM chunks and verify exact byte counts/SHA-256 before writing asset receipts.
+3. On later launches, open the encrypted app-container assets locally. Temporarily decrypt into protected files, load/evaluate MLX tensors and the tokenizer, then remove those files.
+4. Run the actual image encoder and autoregressive decoder. Single-token attention uses the authored Metal shader; prefill uses MLX. No rule-based text formatter or synthetic weights replace the model.
+5. Seal each page's generated Markdown with the pinned model revision in its checkpoint. A versioned cache filename prevents reuse of the removed attention prototype's results. A checkpoint must match the current page index and model identifier.
+6. Render the existing Markdown/LaTeX/HTML/PDF/facsimile/ZIP outputs locally, then seal them. Explicit sharing materializes the selected output temporarily.
 
-At build time, a script copies the local file into the application bundle as `ProviderKeys.plist`. If the local file is missing, it copies the empty example instead, allowing a clean checkout and CI build to compile without secrets. `ProviderKeys.load()` decodes the resulting bundle resource.
+## Fusion boundary
 
-Keys must never be added to Swift source, logs, job manifests, analytics, snapshots, exports, issues, or screenshots. A client application cannot keep a bundled secret from someone who receives the binary. Before distributing the app, use a server-side proxy with authentication, per-user limits, provider-side restrictions, and key rotation.
+The custom shader is `FirebirdRuntime/Sources/FirebirdRuntime/Kernels/FirebirdAttention.metal.txt`. It fuses **Q/K per-head RMSNorm, multimodal RoPE, QKᵀ attention scores, stable softmax and PV accumulation** in one dispatch for batch-one single-token decode. Quantized QKV projection, input-layer RMSNorm, cache append, output projection, the MLP and vision/prefill computations remain separate. The integration does not claim a single-dispatch full transformer layer or a measured speedup.
 
-The ordinary Import tab is separate and continues to use Apple Vision fully on the device.
+The context limit is 4,096 tokens, output limit equal to the remaining context after the prepared image/prompt and page input limit 524,288 pixels. Truncation is an inference failure rather than a completed transcription. The target is iPhone 17 Pro; device memory/latency and handwritten-math accuracy remain to be validated.
 
-## Local jobs and privacy
+## Encryption and cloud consent
 
-Jobs live under `Application Support/MathNoteJobs/<job-id>/`. Each completed stage is atomically checkpointed. Page-level and request-level caches let Resume reuse completed work instead of knowingly repeating provider requests. A vision batch has a bounded wait; if it pauses or times out, Resume continues from saved stages and retries only unfinished requests.
+CryptoKit AES-GCM protects sources, OCR content, thumbnails, titles/original filenames, Academic artifacts and model chunks. File/record identity is authenticated. Model assets additionally use a pinned revision and SHA-256. Master-key wrapping uses Secure Enclave on supported hardware, with ThisDeviceOnly Keychain storage. Provider keys use Keychain; no content keys or provider secrets are bundled as plist files or logged.
 
-The initial upload confirmation states that confirmed pages go directly to Mistral for base OCR and SiliconFlow for mathematical vision correction. Provider quotas, retention rules, and privacy terms apply. Nothing else is shared until the user invokes an iOS share/save action.
+An availability failure pauses the local attempt. Cloud requests require a separate explicit one-shot consent for the saved job, consumed before any Mistral or SiliconFlow request. Storage/authentication failures never trigger cloud fallback. The optional cloud path sends the PDF to Mistral OCR and images/transcripts to Qwen3-VL-32B on SiliconFlow.
 
-Delete and Delete All remove local source pages, evidence, edits, and deliverables for the selected jobs.
+Temporary plaintext is cleared after loading/rendering and at lifecycle cleanup/next launch. Persistent operational metadata remains in SwiftData. Migration does not guarantee forensic deletion of old storage blocks.
 
-## Rendering
+## Validation status
 
-The semantic PDF is generated on device by a restricted local HTML document in `WKWebView`. Math is converted to MathML without a CDN or remote font/script dependency. Markdown `#` through `####` headings are assigned stable HTML anchors. When at least one such heading exists, the renderer inserts an in-document Contents block; documents without Markdown headings omit it. The standalone HTML links to those anchors. The app does not currently create a native PDF outline or bookmark tree, and WebKit may not preserve HTML anchor links as native PDF link annotations on every iOS version.
+The original attention/formatting prototype is removed. Real-model loading/generation, the encrypted asset installer and fused attention integration are implemented in source. The custom shader passes Metal compilation. GPU numerical execution, package/app build and offline iPhone 17 Pro reconstruction have not yet passed in the current environment. See README for the exact test commands; these are still acceptance requirements, not completed claims.
 
-The generated `document.tex` is human-readable, Unicode/CJK-aware XeLaTeX-compatible source and always includes `\tableofcontents`. The app does not claim that XeLaTeX produced `document.pdf`; its current semantic PDF renderer is WebKit. The renderer protocol leaves room for a proven App-Store-compatible native TeX engine later.
+## September 23 runtime corrections
 
-The standalone HTML embeds figures as data URLs and uses a restrictive Content Security Policy. The facsimile PDF is independently generated from immutable normalized source pages and remains the photographed-layout reference.
+Structured multimodal chat now supplies the actual image to preprocessing; the pinned convenience initializer did not. Missing image features fail explicitly. The presence-penalty adapter flattens its view of batched prompt tokens, and generation success requires an explicit stop reason. Completed checkpoints use an input-v2 identifier so stale output from the broken input path is not reused.
 
-## Current limitations
-
-- Handwritten OCR is probabilistic. Review every `[unclear: ...]` marker and compare the semantic result with its source page.
-- Perspective correction is conservative to avoid mistaking a drawn rectangle for the paper boundary. VisionKit scans usually provide the strongest page geometry.
-- The local MathML converter covers common fractions, scripts, radicals, accents, Greek symbols, operators, and matrix environments. Uncommon LaTeX packages or macros remain in the exported `.tex` source but may display literally in the WebKit PDF.
-- Semantic reconstruction preserves meaning and hierarchy; it cannot be pixel-identical to arbitrary handwriting. Use facsimile artifacts when exact visual placement matters.
-- Very large PDFs, HTML documents, or ZIP archives are rejected by explicit local limits.
+Mac GPU numerical checks passed all 18 dtype/cache cases. The supplied handwriting sample finishes through both original and fused attention, but recognition quality is not accepted: some subscripts and vertical connectors are wrong. Post-fix iPhone memory, cold-start/offline behavior and latency still need device acceptance. The simulator exercises UI/storage/export only; local MLX inference is reported unavailable there, without automatic cloud upload. Sustained background local generation is not implemented.

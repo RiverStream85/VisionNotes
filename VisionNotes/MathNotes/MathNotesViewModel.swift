@@ -26,15 +26,28 @@ final class MathNotesViewModel {
     private(set) var selectedJob: MathNoteJobManifest?
     private(set) var selectedSource = ""
     private(set) var selectedJobDirectory: URL?
+    private(set) var hasMistralCredential = false
+    private(set) var hasQwen3VLCredential = false
+    private(set) var credentialStatusMessage: String?
     var draftTitle = ""
+    var mistralCredentialDraft = ""
+    var qwen3VLCredentialDraft = ""
     var errorMessage: String?
 
     @ObservationIgnored private let store: MathNoteJobStore
     @ObservationIgnored private let pipeline: MathNotePipeline
-    @ObservationIgnored private var processingTask: Task<Void, Never>?
+    @ObservationIgnored private let credentialStore: CloudProviderCredentialStore
+    private var processingTask: Task<Void, Never>?
+    @ObservationIgnored private var previewReleaseTail: Task<Void, Never>?
+    @ObservationIgnored private var previewGeneration = 0
+    @ObservationIgnored private var previewConsumerJobID: UUID?
 
-    init(store: MathNoteJobStore = .shared) {
+    init(
+        store: MathNoteJobStore = .shared,
+        credentialStore: CloudProviderCredentialStore = .shared
+    ) {
         self.store = store
+        self.credentialStore = credentialStore
         pipeline = MathNotePipeline(store: store)
     }
 
@@ -140,18 +153,19 @@ final class MathNotesViewModel {
         processingTask = Task { [weak self] in
             guard let self else { return }
             defer { processingTask = nil }
+            var createdJobID: UUID?
             do {
                 let job = try await store.createJob(title: title, normalizedPages: pages)
+                createdJobID = job.id
                 activeJobID = job.id
                 draftPages.removeAll()
                 draftTitle = ""
                 upsert(job)
                 _ = try await pipeline.run(jobID: job.id, progress: progressHandler)
                 await loadJobs()
-                await selectJob(job.id)
+                if previewConsumerJobID == job.id { await selectJob(job.id) }
             } catch {
-                errorMessage = error.mathNoteSafeMessage
-                await loadJobs()
+                await handleRunError(error, jobID: createdJobID)
             }
         }
     }
@@ -165,11 +179,86 @@ final class MathNotesViewModel {
             do {
                 _ = try await pipeline.run(jobID: job.id, progress: progressHandler)
                 await loadJobs()
-                await selectJob(job.id)
+                if previewConsumerJobID == job.id { await selectJob(job.id) }
             } catch {
-                errorMessage = error.mathNoteSafeMessage
-                await loadJobs()
+                await handleRunError(error, jobID: job.id)
             }
+        }
+    }
+
+    func useCloudFallback(_ job: MathNoteJobManifest) {
+        guard processingTask == nil, job.stage == .awaitingCloudConsent else { return }
+        processingTask = Task { [weak self] in
+            guard let self else { return }
+            defer { processingTask = nil }
+            activeJobID = job.id
+            do {
+                // Validate both BYOK values before recording consent so a clean
+                // install stays in the recoverable awaiting state.
+                _ = try ProviderKeys.load(store: credentialStore)
+                let consented = try await store.setCloudFallbackConsent(job.id, allowed: true)
+                upsert(consented)
+                if selectedJob?.id == job.id { selectedJob = consented }
+                _ = try await pipeline.run(
+                    jobID: job.id,
+                    cloudFallbackAuthorized: true,
+                    progress: progressHandler
+                )
+                await loadJobs()
+                if previewConsumerJobID == job.id { await selectJob(job.id) }
+            } catch {
+                refreshCloudCredentialStatus()
+                await handleRunError(error, jobID: job.id)
+            }
+        }
+    }
+
+    func refreshCloudCredentialStatus() {
+        hasMistralCredential = credentialExists(.mistral)
+        hasQwen3VLCredential = credentialExists(.qwen3VL)
+    }
+
+    func saveMistralCredential() {
+        do {
+            try credentialStore.save(mistralCredentialDraft, for: .mistral)
+            mistralCredentialDraft = ""
+            credentialStatusMessage = "Mistral key saved on this device."
+            refreshCloudCredentialStatus()
+        } catch {
+            errorMessage = error.mathNoteSafeMessage
+        }
+    }
+
+    func saveQwen3VLCredential() {
+        do {
+            try credentialStore.save(qwen3VLCredentialDraft, for: .qwen3VL)
+            qwen3VLCredentialDraft = ""
+            credentialStatusMessage = "Qwen3-VL / SiliconFlow key saved on this device."
+            refreshCloudCredentialStatus()
+        } catch {
+            errorMessage = error.mathNoteSafeMessage
+        }
+    }
+
+    func removeMistralCredential() {
+        do {
+            try credentialStore.remove(.mistral)
+            mistralCredentialDraft = ""
+            credentialStatusMessage = "Mistral key removed from this device."
+            refreshCloudCredentialStatus()
+        } catch {
+            errorMessage = "The Mistral key could not be removed from the device Keychain."
+        }
+    }
+
+    func removeQwen3VLCredential() {
+        do {
+            try credentialStore.remove(.qwen3VL)
+            qwen3VLCredentialDraft = ""
+            credentialStatusMessage = "Qwen3-VL / SiliconFlow key removed from this device."
+            refreshCloudCredentialStatus()
+        } catch {
+            errorMessage = "The Qwen3-VL / SiliconFlow key could not be removed from the device Keychain."
         }
     }
 
@@ -178,12 +267,39 @@ final class MathNotesViewModel {
     }
 
     func selectJob(_ id: UUID) async {
+        previewGeneration &+= 1
+        let generation = previewGeneration
+        previewConsumerJobID = id
         do {
+            if let previewReleaseTail { await previewReleaseTail.value }
+            if let previousID = selectedJob?.id, previousID != id {
+                await store.releaseMaterializedPreview(
+                    for: previousID,
+                    expectedURL: selectedJobDirectory
+                )
+                selectedJobDirectory = nil
+            }
             let job = try await store.load(id)
+            let source = try await pipeline.source(jobID: id)
+            let directory: URL?
+            if job.stage == .complete {
+                directory = try await store.materializedDirectory(for: id)
+            } else {
+                await store.releaseMaterializedPreview(for: id)
+                directory = nil
+            }
+
+            guard previewGeneration == generation, previewConsumerJobID == id else {
+                if let directory {
+                    await store.releaseMaterializedPreview(for: id, expectedURL: directory)
+                }
+                return
+            }
             selectedJob = job
-            selectedSource = try await pipeline.source(jobID: id)
-            selectedJobDirectory = await store.directory(for: id)
+            selectedSource = source
+            selectedJobDirectory = directory
         } catch {
+            guard previewGeneration == generation, previewConsumerJobID == id else { return }
             errorMessage = error.mathNoteSafeMessage
         }
     }
@@ -195,6 +311,7 @@ final class MathNotesViewModel {
     func rebuildSelected() {
         guard processingTask == nil, let job = selectedJob else { return }
         let source = selectedSource
+        let generation = previewGeneration
         processingTask = Task { [weak self] in
             guard let self else { return }
             defer { processingTask = nil }
@@ -205,7 +322,20 @@ final class MathNotesViewModel {
                     markdown: source,
                     progress: progressHandler
                 )
+                let shouldMaterialize = previewGeneration == generation
+                    && previewConsumerJobID == updated.id
+                let materializedDirectory = shouldMaterialize
+                    ? try await store.materializedDirectory(for: updated.id)
+                    : nil
                 selectedJob = updated
+                if previewGeneration == generation, previewConsumerJobID == updated.id {
+                    selectedJobDirectory = materializedDirectory
+                } else if let materializedDirectory {
+                    await store.releaseMaterializedPreview(
+                        for: updated.id,
+                        expectedURL: materializedDirectory
+                    )
+                }
                 upsert(updated)
             } catch {
                 errorMessage = error.mathNoteSafeMessage
@@ -221,6 +351,8 @@ final class MathNotesViewModel {
                 if activeJobID == job.id { cancel() }
                 try await store.delete(job.id)
                 if selectedJob?.id == job.id {
+                    previewGeneration &+= 1
+                    previewConsumerJobID = nil
                     selectedJob = nil
                     selectedSource = ""
                     selectedJobDirectory = nil
@@ -238,6 +370,8 @@ final class MathNotesViewModel {
             guard let self else { return }
             do {
                 try await store.deleteAll()
+                previewGeneration &+= 1
+                previewConsumerJobID = nil
                 jobs = []
                 selectedJob = nil
                 selectedSource = ""
@@ -252,6 +386,31 @@ final class MathNotesViewModel {
         guard let directory = selectedJobDirectory else { return nil }
         let url = directory.appendingPathComponent(relativePath)
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    func releaseMaterializedPreview(for jobID: UUID) {
+        previewGeneration &+= 1
+        if previewConsumerJobID == jobID { previewConsumerJobID = nil }
+        let expectedURL = selectedJob?.id == jobID ? selectedJobDirectory : nil
+        if selectedJob?.id == jobID {
+            selectedJobDirectory = nil
+        }
+        let predecessor = previewReleaseTail
+        let store = self.store
+        let task = Task {
+            if let predecessor { await predecessor.value }
+            await store.releaseMaterializedPreview(for: jobID, expectedURL: expectedURL)
+        }
+        previewReleaseTail = task
+    }
+
+    /// Cancels pipeline work before lifecycle plaintext purging and drops the
+    /// current preview. Encrypted checkpoints remain available for Resume.
+    func suspendForProtectedLifecycle() {
+        processingTask?.cancel()
+        if let jobID = previewConsumerJobID {
+            releaseMaterializedPreview(for: jobID)
+        }
     }
 
     func sourcePageURLs() -> [URL] {
@@ -278,6 +437,25 @@ final class MathNotesViewModel {
             jobs.insert(manifest, at: 0)
         }
         jobs.sort { $0.updatedAt > $1.updatedAt }
+    }
+
+    private func credentialExists(_ provider: CloudProviderCredentialStore.Provider) -> Bool {
+        guard let value = try? credentialStore.value(for: provider) else { return false }
+        return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func handleRunError(_ error: Error, jobID: UUID?) async {
+        await loadJobs()
+        if let jobID,
+           let job = jobs.first(where: { $0.id == jobID }),
+           job.stage == .awaitingCloudConsent,
+           let mathError = error as? MathNoteError,
+           mathError == .localInferenceUnavailable {
+            // The persisted job state is the actionable event; avoid showing
+            // the same condition as a generic conversion-failure alert.
+            return
+        }
+        errorMessage = error.mathNoteSafeMessage
     }
 
     nonisolated private static func renderPDFPages(_ url: URL) async throws -> [Data] {

@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 56;
+	objectVersion = 60;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -65,9 +65,16 @@
 		E1000000000000000000000A /* MathNotesViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000000000000000000000A /* MathNotesViewModel.swift */; };
 		E1000000000000000000000B /* MathNotesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000000000000000000000B /* MathNotesView.swift */; };
 		E20000000000000000000001 /* AcademicOCRTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000001 /* AcademicOCRTests.swift */; };
+		E31000000000000000000001 /* SecureKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F31000000000000000000001 /* SecureKeyStore.swift */; };
+		E31000000000000000000002 /* EncryptedDataVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = F31000000000000000000002 /* EncryptedDataVault.swift */; };
+		E31000000000000000000003 /* CloudProviderCredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F31000000000000000000003 /* CloudProviderCredentialStore.swift */; };
+		E31000000000000000000004 /* FirebirdLocalModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F31000000000000000000004 /* FirebirdLocalModel.swift */; };
 		E4655E3481FBC15A7178FFE2 /* VisionNotesUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 008B77EFDC6AC2061D5B5551 /* VisionNotesUITests.swift */; };
 		E58C331B921AC81B532D1428 /* TextRecognitionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E92539D3A35228552E1B2FE /* TextRecognitionService.swift */; };
 		F39BC494587E62449138FADB /* LibraryViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A759E734A15942FC5EAF3C8 /* LibraryViewModel.swift */; };
+		FB0000000000000000000001 /* FirebirdRuntime in Frameworks */ = {isa = PBXBuildFile; productRef = FB0000000000000000000002 /* FirebirdRuntime */; };
+		FB0000000000000000000004 /* FirebirdModelAssets.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB0000000000000000000005 /* FirebirdModelAssets.swift */; };
+		FB0000000000000000000006 /* FirebirdModel.lock.json in Resources */ = {isa = PBXBuildFile; fileRef = FB0000000000000000000007 /* FirebirdModel.lock.json */; };
 		FC5C1FDD6E0F935CCE437655 /* ImportViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2F5847B6863846C7B2BE5A1 /* ImportViewModel.swift */; };
 /* End PBXBuildFile section */
 
@@ -148,11 +155,16 @@
 		F10000000000000000000009 /* DocumentScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentScannerView.swift; sourceTree = "<group>"; };
 		F1000000000000000000000A /* MathNotesViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MathNotesViewModel.swift; sourceTree = "<group>"; };
 		F1000000000000000000000B /* MathNotesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MathNotesView.swift; sourceTree = "<group>"; };
-		F1000000000000000000000C /* ProviderKeys.example.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = ProviderKeys.example.plist; sourceTree = "<group>"; };
 		F20000000000000000000001 /* AcademicOCRTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcademicOCRTests.swift; sourceTree = "<group>"; };
 		F2B5B94C2EA07DA9E42DB0A0 /* TextBlock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextBlock.swift; sourceTree = "<group>"; };
+		F31000000000000000000001 /* SecureKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureKeyStore.swift; sourceTree = "<group>"; };
+		F31000000000000000000002 /* EncryptedDataVault.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EncryptedDataVault.swift; sourceTree = "<group>"; };
+		F31000000000000000000003 /* CloudProviderCredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudProviderCredentialStore.swift; sourceTree = "<group>"; };
+		F31000000000000000000004 /* FirebirdLocalModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirebirdLocalModel.swift; sourceTree = "<group>"; };
 		F42DDA1168DDA41AE60468C1 /* BoundingBoxConverter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundingBoxConverter.swift; sourceTree = "<group>"; };
 		F45213EE8CD1BD91F703902A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		FB0000000000000000000005 /* FirebirdModelAssets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirebirdModelAssets.swift; sourceTree = "<group>"; };
+		FB0000000000000000000007 /* FirebirdModel.lock.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = FirebirdModel.lock.json; sourceTree = "<group>"; };
 		FC415B2DFBFDBE77B14AEE92 /* ImportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportView.swift; sourceTree = "<group>"; };
 		FEF758352C9F1F1741F0C364 /* DocumentProcessingServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentProcessingServiceTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -162,6 +174,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FB0000000000000000000001 /* FirebirdRuntime in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -250,8 +263,8 @@
 		7B82012031BF8183412EB2D1 /* Resources */ = {
 			isa = PBXGroup;
 			children = (
+				FB0000000000000000000007 /* FirebirdModel.lock.json */,
 				F45213EE8CD1BD91F703902A /* Assets.xcassets */,
-				F1000000000000000000000C /* ProviderKeys.example.plist */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -305,6 +318,7 @@
 				17CD4353267F96232C7FC791 /* Models */,
 				3DC0002850B83ECB640C911A /* Persistence */,
 				7B82012031BF8183412EB2D1 /* Resources */,
+				F31000000000000000000010 /* Security */,
 				FFF1114519579BF833A7BAE6 /* Services */,
 				C7576101B875A076FFC2AC1B /* Utilities */,
 				9D1136874929E9EAE07D8680 /* ViewModels */,
@@ -333,6 +347,7 @@
 		F10000000000000000000010 /* MathNotes */ = {
 			isa = PBXGroup;
 			children = (
+				FB0000000000000000000005 /* FirebirdModelAssets.swift */,
 				F10000000000000000000001 /* MathNoteModels.swift */,
 				F10000000000000000000002 /* MathNoteJobStore.swift */,
 				F10000000000000000000003 /* ProviderClients.swift */,
@@ -344,6 +359,8 @@
 				F10000000000000000000009 /* DocumentScannerView.swift */,
 				F1000000000000000000000A /* MathNotesViewModel.swift */,
 				F1000000000000000000000B /* MathNotesView.swift */,
+				F31000000000000000000003 /* CloudProviderCredentialStore.swift */,
+				F31000000000000000000004 /* FirebirdLocalModel.swift */,
 			);
 			path = MathNotes;
 			sourceTree = "<group>";
@@ -354,6 +371,15 @@
 				F20000000000000000000001 /* AcademicOCRTests.swift */,
 			);
 			path = MathNotes;
+			sourceTree = "<group>";
+		};
+		F31000000000000000000010 /* Security */ = {
+			isa = PBXGroup;
+			children = (
+				F31000000000000000000001 /* SecureKeyStore.swift */,
+				F31000000000000000000002 /* EncryptedDataVault.swift */,
+			);
+			path = Security;
 			sourceTree = "<group>";
 		};
 		FFF1114519579BF833A7BAE6 /* Services */ = {
@@ -402,13 +428,15 @@
 				AEC497F370DDBAD803AF44CD /* Sources */,
 				819DFE531B15C2032D92F353 /* Frameworks */,
 				9AB79077DFDD75F158996501 /* Resources */,
-				E30000000000000000000001 /* Copy Local Provider Keys */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
 			name = VisionNotes;
+			packageProductDependencies = (
+				FB0000000000000000000002 /* FirebirdRuntime */,
+			);
 			productName = VisionNotes;
 			productReference = B6CDB6E5D160E013280D3C68 /* VisionNotes.app */;
 			productType = "com.apple.product-type.application";
@@ -463,6 +491,9 @@
 				Base,
 			);
 			mainGroup = ADCF10F76EBF2A74473E9DC4;
+			packageReferences = (
+				FB0000000000000000000003 /* XCLocalSwiftPackageReference "FirebirdRuntime" */,
+			);
 			productRefGroup = 00C45FD35CB0F9C5F764F070 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -479,6 +510,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FB0000000000000000000006 /* FirebirdModel.lock.json in Resources */,
 				150AD601BA2D99094D7DB08D /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -498,29 +530,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
-
-/* Begin PBXShellScriptBuildPhase section */
-		E30000000000000000000001 /* Copy Local Provider Keys */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-			);
-			name = "Copy Local Provider Keys";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "set -eu\nKEYS_FILE=\"${SRCROOT}/VisionNotes/Resources/ProviderKeys.plist\"\nif [ ! -f \"${KEYS_FILE}\" ]; then\n  KEYS_FILE=\"${SRCROOT}/VisionNotes/Resources/ProviderKeys.example.plist\"\nfi\ncp \"${KEYS_FILE}\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/ProviderKeys.plist\"\n";
-			showEnvVarsInLog = 0;
-		};
-/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		0EF4E3D5BD466F076C3DEDDD /* Sources */ = {
@@ -551,6 +560,11 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FB0000000000000000000004 /* FirebirdModelAssets.swift in Sources */,
+				E31000000000000000000001 /* SecureKeyStore.swift in Sources */,
+				E31000000000000000000002 /* EncryptedDataVault.swift in Sources */,
+				E31000000000000000000003 /* CloudProviderCredentialStore.swift in Sources */,
+				E31000000000000000000004 /* FirebirdLocalModel.swift in Sources */,
 				E10000000000000000000001 /* MathNoteModels.swift in Sources */,
 				E10000000000000000000002 /* MathNoteJobStore.swift in Sources */,
 				E10000000000000000000003 /* ProviderClients.swift in Sources */,
@@ -854,6 +868,20 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		FB0000000000000000000003 /* XCLocalSwiftPackageReference "FirebirdRuntime" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = FirebirdRuntime;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		FB0000000000000000000002 /* FirebirdRuntime */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = FirebirdRuntime;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 98F54143AB4E86B28C3AFEE0 /* Project object */;
 }

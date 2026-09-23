@@ -161,7 +161,7 @@ struct DemoDataService {
         let fileName = FileNameGenerator.sourceFileName(documentID: documentID, type: type)
         try storage.write(rendered.imageData, fileName: fileName, in: .sources)
 
-        let document = LibraryDocument(
+        let document = try LibraryDocument(
             id: documentID,
             title: title,
             documentType: type,
@@ -176,7 +176,7 @@ struct DemoDataService {
         )
         modelContext.insert(document)
 
-        let page = DocumentPage(
+        let page = try DocumentPage(
             pageNumber: 1,
             recognizedText: rendered.text,
             imageFileName: fileName,
@@ -184,7 +184,7 @@ struct DemoDataService {
         )
         modelContext.insert(page)
         document.pages.append(page)
-        page.textBlocks = rendered.blocks.map { TextBlock(recognized: $0) }
+        page.textBlocks = try rendered.blocks.map { try TextBlock(recognized: $0) }
 
         return document
     }
@@ -198,7 +198,7 @@ struct DemoDataService {
         let fileName = FileNameGenerator.sourceFileName(documentID: documentID, type: .pdf)
         try storage.write(pdfData, fileName: fileName, in: .sources)
 
-        let document = LibraryDocument(
+        let document = try LibraryDocument(
             id: documentID,
             title: "Design Review Notes",
             documentType: .pdf,
@@ -221,7 +221,7 @@ struct DemoDataService {
             )
             try storage.write(rendered.imageData, fileName: cacheFileName, in: .pages)
 
-            let page = DocumentPage(
+            let page = try DocumentPage(
                 pageNumber: pageNumber,
                 recognizedText: rendered.text,
                 imageFileName: cacheFileName,
@@ -229,7 +229,7 @@ struct DemoDataService {
             )
             modelContext.insert(page)
             document.pages.append(page)
-            page.textBlocks = rendered.blocks.map { TextBlock(recognized: $0) }
+            page.textBlocks = try rendered.blocks.map { try TextBlock(recognized: $0) }
         }
 
         return document

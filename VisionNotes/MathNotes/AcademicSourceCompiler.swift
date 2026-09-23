@@ -294,6 +294,13 @@ private struct MarkdownHTMLRenderer {
                 cursor = source.index(close, offsetBy: 2)
                 continue
             }
+            if tail.hasPrefix("$$"),
+               let close = source[source.index(cursor, offsetBy: 2)...].range(of: "$$") {
+                let value = String(source[source.index(cursor, offsetBy: 2)..<close.lowerBound])
+                output += LaTeXMathMLConverter.render(value, display: true)
+                cursor = close.upperBound
+                continue
+            }
             if source[cursor] == "$", let close = source[source.index(after: cursor)...].firstIndex(of: "$") {
                 let value = String(source[source.index(after: cursor)..<close])
                 output += LaTeXMathMLConverter.render(value, display: false)
@@ -416,7 +423,7 @@ enum LaTeXMathMLConverter {
     }
 
     private static func renderMatrixIfPresent(_ latex: String) -> String? {
-        let environments = ["pmatrix", "bmatrix", "matrix", "vmatrix", "array"]
+        let environments = ["pmatrix", "bmatrix", "matrix", "vmatrix", "array", "aligned"]
         guard let environment = environments.first(where: { latex.contains("\\begin{\($0)}") }),
               let start = latex.range(of: "\\begin{\(environment)}"),
               let end = latex.range(of: "\\end{\(environment)}", range: start.upperBound..<latex.endIndex) else { return nil }
@@ -435,7 +442,7 @@ enum LaTeXMathMLConverter {
             }.joined()
             return "<mtr>\(cells)</mtr>"
         }.joined()
-        let delimiters: (String, String) = environment == "bmatrix" ? ("[", "]") : environment == "vmatrix" ? ("|", "|") : environment == "matrix" || environment == "array" ? ("", "") : ("(", ")")
+        let delimiters: (String, String) = environment == "bmatrix" ? ("[", "]") : environment == "vmatrix" ? ("|", "|") : environment == "matrix" || environment == "array" || environment == "aligned" ? ("", "") : ("(", ")")
         return "<mo>\(delimiters.0)</mo><mtable>\(rows)</mtable><mo>\(delimiters.1)</mo>"
     }
 }

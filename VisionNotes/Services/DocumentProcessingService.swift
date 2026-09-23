@@ -54,7 +54,7 @@ final class DocumentProcessingService {
         try storage.write(prepared.sourceData, fileName: fileName, in: .sources)
 
         let now = Date()
-        let document = LibraryDocument(
+        let document = try LibraryDocument(
             id: documentID,
             title: FileNameGenerator.title(fromOriginalFileName: originalFileName, type: type, date: now),
             documentType: type,
@@ -69,7 +69,7 @@ final class DocumentProcessingService {
         )
         modelContext.insert(document)
 
-        let page = DocumentPage(
+        let page = try DocumentPage(
             pageNumber: 1,
             recognizedText: "",
             imageFileName: fileName
@@ -87,8 +87,8 @@ final class DocumentProcessingService {
             try Task.checkCancellation()
 
             progress?(.savingResults, 0.85)
-            page.recognizedText = recognized.text
-            page.textBlocks = recognized.blocks.map { TextBlock(recognized: $0) }
+            try page.setRecognizedText(recognized.text)
+            page.textBlocks = try recognized.blocks.map { try TextBlock(recognized: $0) }
             document.processingStatus = .completed
             document.processingProgress = 1
             document.processingError = nil
@@ -116,6 +116,7 @@ final class DocumentProcessingService {
         let fileName = FileNameGenerator.sourceFileName(documentID: documentID, type: .pdf)
         try storage.copyItem(at: sourceURL, toFileName: fileName, in: .sources)
         let localURL = try storage.url(for: fileName, in: .sources)
+        defer { storage.releaseMaterializedFile(fileName: fileName, in: .sources) }
 
         let pageCount: Int
         do {
@@ -126,7 +127,7 @@ final class DocumentProcessingService {
         }
 
         let now = Date()
-        let document = LibraryDocument(
+        let document = try LibraryDocument(
             id: documentID,
             title: FileNameGenerator.title(fromOriginalFileName: originalFileName, type: .pdf, date: now),
             documentType: .pdf,
@@ -175,6 +176,12 @@ final class DocumentProcessingService {
         do {
             if document.documentType == .pdf {
                 let localURL = try storage.url(for: document.localFileName, in: .sources)
+                defer {
+                    storage.releaseMaterializedFile(
+                        fileName: document.localFileName,
+                        in: .sources
+                    )
+                }
                 guard storage.fileExists(document.localFileName, in: .sources) else {
                     throw AppError.fileMissing(fileName: document.localFileName)
                 }
@@ -197,20 +204,23 @@ final class DocumentProcessingService {
                 try Task.checkCancellation()
                 progress?(.savingResults, 0.85)
 
-                let page = document.sortedPages.first ?? {
-                    let created = DocumentPage(
+                let page: DocumentPage
+                if let existing = document.sortedPages.first {
+                    page = existing
+                } else {
+                    let created = try DocumentPage(
                         pageNumber: 1,
                         imageFileName: document.localFileName
                     )
                     modelContext.insert(created)
                     document.pages.append(created)
-                    return created
-                }()
+                    page = created
+                }
                 for block in page.textBlocks {
                     modelContext.delete(block)
                 }
-                page.recognizedText = recognized.text
-                page.textBlocks = recognized.blocks.map { TextBlock(recognized: $0) }
+                try page.setRecognizedText(recognized.text)
+                page.textBlocks = try recognized.blocks.map { try TextBlock(recognized: $0) }
                 document.pageCount = 1
             }
 
@@ -235,6 +245,12 @@ final class DocumentProcessingService {
         let recognized: RecognizedPage
         if document.documentType == .pdf {
             let localURL = try storage.url(for: document.localFileName, in: .sources)
+            defer {
+                storage.releaseMaterializedFile(
+                    fileName: document.localFileName,
+                    in: .sources
+                )
+            }
             guard storage.fileExists(document.localFileName, in: .sources) else {
                 throw AppError.fileMissing(fileName: document.localFileName)
             }
@@ -251,8 +267,8 @@ final class DocumentProcessingService {
         for block in page.textBlocks {
             modelContext.delete(block)
         }
-        page.recognizedText = recognized.text
-        page.textBlocks = recognized.blocks.map { TextBlock(recognized: $0) }
+        try page.setRecognizedText(recognized.text)
+        page.textBlocks = try recognized.blocks.map { try TextBlock(recognized: $0) }
         document.updatedAt = Date()
         try store.save()
         return recognized
@@ -282,8 +298,9 @@ final class DocumentProcessingService {
             )
             try storage.write(rendered.cacheImageData, fileName: cacheFileName, in: .pages)
 
-            if pageNumber == 1, document.thumbnailData == nil {
-                document.thumbnailData = try? await ImagePreparer.thumbnail(from: rendered.cacheImageData)
+            if pageNumber == 1, try document.decryptedThumbnailData() == nil {
+                let thumbnail = try await ImagePreparer.thumbnail(from: rendered.cacheImageData)
+                try document.setThumbnailData(thumbnail)
             }
 
             progress?(.recognizingText, base + 0.5 / Double(max(pageCount, 1)))
@@ -291,14 +308,14 @@ final class DocumentProcessingService {
             try Task.checkCancellation()
             guard isLive(document) else { throw CancellationError() }
 
-            let page = DocumentPage(
+            let page = try DocumentPage(
                 pageNumber: pageNumber,
                 recognizedText: recognized.text,
                 imageFileName: cacheFileName
             )
             modelContext.insert(page)
             document.pages.append(page)
-            page.textBlocks = recognized.blocks.map { TextBlock(recognized: $0) }
+            page.textBlocks = try recognized.blocks.map { try TextBlock(recognized: $0) }
 
             document.processingProgress = PDFPageMapper.progress(
                 completedPages: pageNumber,

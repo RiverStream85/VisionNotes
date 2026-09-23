@@ -14,6 +14,8 @@ enum AppError: LocalizedError, Equatable {
     case fileCopyFailed(reason: String)
     case fileWriteFailed(reason: String)
     case fileMissing(fileName: String)
+    case fileIntegrityFailed(fileName: String)
+    case encryptedDataUnavailable(reason: String)
     case fileDeleteFailed(reason: String)
     case ocrRequestFailed(reason: String)
     case noTextRecognized
@@ -42,6 +44,10 @@ enum AppError: LocalizedError, Equatable {
             return "The file could not be saved."
         case .fileMissing(let fileName):
             return "“\(fileName)” is missing from local storage."
+        case .fileIntegrityFailed(let fileName):
+            return "“\(fileName)” could not pass its local integrity check."
+        case .encryptedDataUnavailable:
+            return "Encrypted note data is unavailable."
         case .fileDeleteFailed:
             return "Some local files could not be deleted."
         case .ocrRequestFailed:
@@ -71,6 +77,10 @@ enum AppError: LocalizedError, Equatable {
             return "Free up some storage space and try again."
         case .fileMissing:
             return "Delete this document and import it again."
+        case .fileIntegrityFailed:
+            return "Do not overwrite this document. Restore it from a trusted export or re-import the original."
+        case .encryptedDataUnavailable:
+            return "Unlock this device and try again. If the problem continues, do not overwrite the note; restore it from a trusted export."
         case .fileDeleteFailed:
             return "The entry was removed from your library. Some files may remain on disk."
         case .ocrRequestFailed:
@@ -88,6 +98,11 @@ enum AppError: LocalizedError, Equatable {
     static func wrap(_ error: Error, fallback: (String) -> AppError) -> AppError {
         if let appError = error as? AppError { return appError }
         if error is CancellationError { return .processingCancelled }
+        if error is SecureKeyStoreError
+            || error is EncryptedDataVaultError
+            || error is EncryptedTextCodecError {
+            return .encryptedDataUnavailable(reason: error.localizedDescription)
+        }
         return fallback(error.localizedDescription)
     }
 }

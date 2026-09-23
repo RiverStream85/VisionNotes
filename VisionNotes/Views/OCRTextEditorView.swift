@@ -15,6 +15,7 @@ struct OCRTextEditorView: View {
 
     @State private var text: String = ""
     @State private var previewImage: UIImage?
+    @State private var isTextAvailable = false
     @State private var isRunningOCR = false
     @State private var showsReOCRConfirmation = false
     @State private var errorAlert: ErrorAlert?
@@ -36,7 +37,7 @@ struct OCRTextEditorView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save", action: save)
-                        .disabled(isRunningOCR)
+                        .disabled(isRunningOCR || !isTextAvailable)
                         .accessibilityIdentifier("saveOCRTextButton")
                 }
                 ToolbarItem(placement: .bottomBar) {
@@ -113,7 +114,13 @@ struct OCRTextEditorView: View {
     // MARK: - Actions
 
     private func load() async {
-        text = page.recognizedText
+        do {
+            text = try page.decryptedRecognizedText()
+            isTextAvailable = true
+        } catch {
+            isTextAvailable = false
+            errorAlert = ErrorAlert(error)
+        }
         guard let fileName = page.imageFileName else { return }
         let directory = PageImageLocator.directory(for: document.documentType)
         let data = try? await Task.detached(priority: .userInitiated) {

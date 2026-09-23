@@ -51,7 +51,7 @@ final class DocumentStoreTests: XCTestCase {
         let sourceName = FileNameGenerator.sourceFileName(documentID: id, type: type)
         try storage.write(Data("source".utf8), fileName: sourceName, in: .sources)
 
-        let document = LibraryDocument(
+        let document = try LibraryDocument(
             id: id,
             title: title,
             documentType: type,
@@ -67,15 +67,15 @@ final class DocumentStoreTests: XCTestCase {
             let pageFileName = FileNameGenerator.pageImageFileName(documentID: id, pageNumber: pageNumber)
             try storage.write(Data("page".utf8), fileName: pageFileName, in: .pages)
 
-            let page = DocumentPage(
+            let page = try DocumentPage(
                 pageNumber: pageNumber,
                 recognizedText: text,
                 imageFileName: pageFileName
             )
             context.insert(page)
             document.pages.append(page)
-            page.textBlocks = (0..<3).map { blockIndex in
-                TextBlock(
+            page.textBlocks = try (0..<3).map { blockIndex in
+                try TextBlock(
                     text: "block \(blockIndex)",
                     confidence: 0.9,
                     boundingBoxX: 0.1,
@@ -153,6 +153,25 @@ final class DocumentStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testTitleAndOriginalNameAreSealedAndLegacyMetadataMigrates() throws {
+        let document = try LibraryDocument(title: "Private theorem", documentType: .photo,
+            localFileName: "opaque.jpg", originalFileName: "Private theorem.jpg")
+        XCTAssertEqual(try document.title, "Private theorem")
+        XCTAssertEqual(document.legacyTitle, "")
+        XCTAssertNil(document.legacyOriginalFileName)
+        XCTAssertNotNil(document.originalFileNameCiphertext)
+        let ciphertext = try XCTUnwrap(document.titleCiphertext)
+        XCTAssertNil(ciphertext.range(of: Data("Private theorem".utf8)))
+        document.titleCiphertext = nil
+        document.legacyTitle = "Old theorem"
+        XCTAssertTrue(try document.migrateLegacyMetadataIfNeeded())
+        XCTAssertEqual(try document.title, "Old theorem")
+        XCTAssertEqual(document.legacyTitle, "")
+        document.titleCiphertext = Data("tampered".utf8)
+        XCTAssertThrowsError(try document.title)
+    }
+
+    @MainActor
     func testDeletingByOffsetsRemovesTheRightRows() throws {
         let context = try makeContext()
         let storage = FileStorageService(rootDirectory: root)
@@ -161,11 +180,11 @@ final class DocumentStoreTests: XCTestCase {
         try makeDocument(in: context, storage: storage, title: "Keep", pageTexts: ["a"])
         try makeDocument(in: context, storage: storage, title: "Remove", pageTexts: ["b"])
 
-        let documents = try store.allDocuments().sorted { $0.title < $1.title }
+        let documents = try store.allDocuments().sorted { try $0.title < $1.title }
         try store.delete(documentsAt: IndexSet(integer: 1), in: documents)
 
         let remaining = try store.allDocuments()
-        XCTAssertEqual(remaining.map(\.title), ["Keep"])
+        XCTAssertEqual(try remaining.map { try $0.title }, ["Keep"])
     }
 
     @MainActor
@@ -210,6 +229,60 @@ final class DocumentStoreTests: XCTestCase {
         let document = try makeDocument(in: context, storage: storage, title: "Old", pageTexts: ["a"])
         try store.rename(document, to: "  New/Title  ")
 
-        XCTAssertEqual(document.title, "New Title")
+        XCTAssertEqual(try document.title, "New Title")
+    }
+
+    @MainActor
+    func testLegacyContentIsVerifiedEncryptedAndCleared() throws {
+        let context = try makeContext()
+        let storage = FileStorageService(rootDirectory: root)
+        let document = try makeDocument(
+            in: context,
+            storage: storage,
+            title: "Legacy",
+            pageTexts: ["placeholder"]
+        )
+        let page = try XCTUnwrap(document.sortedPages.first)
+        let block = try XCTUnwrap(page.sortedTextBlocks.first)
+        let thumbnail = Data("legacy thumbnail".utf8)
+
+        page.recognizedTextCiphertext = nil
+        page.legacyRecognizedText = "legacy page"
+        block.textCiphertext = nil
+        block.legacyText = "legacy block"
+        document.thumbnailCiphertext = nil
+        document.legacyThumbnailData = thumbnail
+        try context.save()
+
+        try DocumentStore(modelContext: context, storage: storage).migrateLegacyContent()
+
+        XCTAssertEqual(page.legacyRecognizedText, "")
+        XCTAssertEqual(block.legacyText, "")
+        XCTAssertNil(document.legacyThumbnailData)
+        XCTAssertNotNil(page.recognizedTextCiphertext)
+        XCTAssertNotNil(block.textCiphertext)
+        XCTAssertNotNil(document.thumbnailCiphertext)
+        XCTAssertEqual(try page.decryptedRecognizedText(), "legacy page")
+        XCTAssertEqual(try block.decryptedText(), "legacy block")
+        XCTAssertEqual(try document.decryptedThumbnailData(), thumbnail)
+    }
+
+    @MainActor
+    func testTamperedCiphertextThrowsInsteadOfReturningEmptyText() throws {
+        let context = try makeContext()
+        let storage = FileStorageService(rootDirectory: root)
+        let document = try makeDocument(
+            in: context,
+            storage: storage,
+            title: "Tampered",
+            pageTexts: ["must survive"]
+        )
+        let page = try XCTUnwrap(document.sortedPages.first)
+        var ciphertext = try XCTUnwrap(page.recognizedTextCiphertext)
+        ciphertext[ciphertext.index(before: ciphertext.endIndex)] ^= 0x01
+        page.recognizedTextCiphertext = ciphertext
+
+        XCTAssertThrowsError(try page.decryptedRecognizedText())
+        XCTAssertThrowsError(try DocumentStore(modelContext: context, storage: storage).searchSnapshots())
     }
 }

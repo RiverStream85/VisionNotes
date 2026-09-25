@@ -33,7 +33,17 @@ Other OCR experiments are archived outside the repo: `~/data/system-relocation/s
 | same, fused kernel | 0.068 | 2.67 s | 29.9 tok/s | 22.5 s |
 
 Peak MLX memory was about 2.1 GiB.
-The owner reports the phone build works and is fast; phone numbers have not been recorded yet.
+
+## Measured on iPhone 18 Pro Max, Release, recipe-4, high tier (2026-09-25)
+
+| Fixture | CER | TTFT | Decode | Total | Output tokens | Peak MLX |
+| --- | --- | --- | --- | --- | --- | --- |
+| `math-ocr-test.png` | 0.067 | 1.13 s | 74.3 tok/s | 9.13 s | 594 | 2.25 GB |
+| `screenshot-ocr-test.png` | 0.063 | 1.11 s | 81.8 tok/s | 3.69 s | 211 | 2.25 GB |
+| `handwriting-ocr-test.jpg` (synthetic) | 0.122 | 1.14 s | 79.7 tok/s | 3.70 s | 204 | 2.22 GB |
+
+Model load from the bundle: 0.80 s. The phone matches or beats the M4. The earlier ~3-minute scan came from Xcode's Run action building Debug (MLX's C++ at -O0, ~4.7× slower decode); the scheme now runs Release.
+Re-run with `FirebirdBenchmark` (`VisionNotes/App/FirebirdBenchmark.swift`): copy images to `Documents/Benchmark` in the app container (`xcrun devicectl device copy to --domain-type appDataContainer --domain-identifier com.visionnotes.VisionNotes ...`), then `xcrun devicectl device process launch --console --device <id> --environment-variables '{"VN_BENCHMARK":"1"}' com.visionnotes.VisionNotes`. Outputs land in `Documents/Benchmark/results.json`; score them with `TranscriptionMetrics.characterErrorRate`.
 Handwriting and figures → Markdown are not good yet; the fixture is typeset, so collect handwritten samples.
 
 ## Build and install on the phone
@@ -57,10 +67,10 @@ For unsigned compile checks over SSH: `xcodebuild build -project VisionNotes.xco
 
 ## Next steps (priority order)
 
-1. Speed. Scanning a simple screenshot on the phone took about 3 minutes. Check whether the Run scheme uses Debug (MLX is ~3× slower in Debug), how many visual tokens tall screenshots produce, and whether generation runs to the output limit or retries. Evaluate smaller/faster OCR models (e.g. DeepSeek-OCR MoE, PaddleOCR-VL 0.9B, granite-docling-258M, MinerU2.5 1.2B).
+1. Box-emitting, resumable on-device OCR: PaddleOCR-VL-1.5 port in progress on `perf/firebird-speed` (model comparison in `Evaluation/README.md` and `Evaluation/bench_vlm.py`). Wire `reconstruct(imageData:resumingFrom:)` into the Academic and Library paths so an interrupted page continues instead of restarting.
 2. Background GPU: iOS 26 `BGContinuedProcessingTask` with `requiredResources = .gpu` allows GPU work in the background only where `BGTaskScheduler.supportedResources` contains `.gpu`; in Sept 2025 Apple DTS said that was M3+ iPads only, no iPhone. Check the value on the iPhone 18 Pro Max before building on it.
 3. Handwriting and figure recognition → Markdown, and a better preview (the Library readers show the Markdown source as text). Add handwritten pages with reference transcriptions to `Evaluation/`.
-4. Record iPhone 18 Pro Max numbers (TTFT, tok/s, peak memory) and calibrate `FirebirdDeviceBudget.fixedReserve` / `reservePerPixel`, which are still estimates.
+4. Calibrate `FirebirdDeviceBudget.fixedReserve` / `reservePerPixel` against the phone's measured peak (2.25 GB at the high tier).
 5. Optional: reduce the cloud fallback to Mistral OCR alone with `include_blocks=True` (block boxes, figure crops, equation/table regions) instead of Mistral + SiliconFlow Qwen3-VL crops and merge.
 
 ## Cleanup status

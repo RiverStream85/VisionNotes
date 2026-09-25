@@ -13,6 +13,9 @@ struct VisionNotesApp: App {
         LegacyStorageCleanup.run()
         Task.detached(priority: .utility) { FirebirdModelAssets.removeObsoleteFiles() }
         containerResult = ModelContainerProvider.makeContainer(inMemory: isUITesting)
+        if FirebirdBenchmark.isRequested {
+            Task { await FirebirdBenchmark.run() }
+        }
     }
 
     var body: some Scene {

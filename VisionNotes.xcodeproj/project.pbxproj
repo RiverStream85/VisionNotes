@@ -29,6 +29,7 @@
 		3C62351A4A60DDD3BE0E4AE1 /* DocumentProcessingServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEF758352C9F1F1741F0C364 /* DocumentProcessingServiceTests.swift */; };
 		3D8ABD1BFE50F36EEC26D326 /* ModelContainerProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAC842C326678E6CA226ECF6 /* ModelContainerProvider.swift */; };
 		3FF18A7CB181606FA2746533 /* VisionNotesApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBD36A7F7003C1F1FDE19393 /* VisionNotesApp.swift */; };
+		A1F0C0DE00000000000000B2 /* FirebirdBenchmark.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1F0C0DE00000000000000F2 /* FirebirdBenchmark.swift */; };
 		442DDFC7D27D1AB56FB1DE5D /* DocumentProcessingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EE423E483C390F4EEAA6E4D /* DocumentProcessingService.swift */; };
 		45776E6C1202B21414EE8939 /* LibraryDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2324D70145024E2592D746D6 /* LibraryDocument.swift */; };
 		4DA88C1898E69E76FAC41BA4 /* RecognizedTextBlock.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3060114D3D7F1C29DA53936 /* RecognizedTextBlock.swift */; };
@@ -140,6 +141,7 @@
 		D2F5847B6863846C7B2BE5A1 /* ImportViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportViewModel.swift; sourceTree = "<group>"; };
 		D8F97BD7101C883725A92CE5 /* SearchEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchEngine.swift; sourceTree = "<group>"; };
 		DBD36A7F7003C1F1FDE19393 /* VisionNotesApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionNotesApp.swift; sourceTree = "<group>"; };
+		A1F0C0DE00000000000000F2 /* FirebirdBenchmark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirebirdBenchmark.swift; sourceTree = "<group>"; };
 		DEAC81368AD46C45D1F6E53E /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		E02A90D9643568EA39115CFB /* VisionNotesTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VisionNotesTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		E05CF40CF792E0912D367BE5 /* DocumentStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentStore.swift; sourceTree = "<group>"; };
@@ -210,6 +212,7 @@
 			children = (
 				73B46C1116F96DB1FE72ACF8 /* RootView.swift */,
 				DBD36A7F7003C1F1FDE19393 /* VisionNotesApp.swift */,
+				A1F0C0DE00000000000000F2 /* FirebirdBenchmark.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -601,6 +604,7 @@
 				E1000000000000000000000B /* MathNotesView.swift in Sources */,
 				B94CC16BB296EB188089983E /* RootView.swift in Sources */,
 				3FF18A7CB181606FA2746533 /* VisionNotesApp.swift in Sources */,
+				A1F0C0DE00000000000000B2 /* FirebirdBenchmark.swift in Sources */,
 				5620CF5D592AB0B2338BCFE3 /* AppError.swift in Sources */,
 				08CE55BFE32DD64B5921A033 /* DocumentEnums.swift in Sources */,
 				BE523E1DF9718403F3507EC7 /* DocumentPage.swift in Sources */,

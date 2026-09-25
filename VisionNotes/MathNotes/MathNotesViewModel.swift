@@ -34,6 +34,14 @@ final class MathNotesViewModel {
     var qwen3VLCredentialDraft = ""
     var errorMessage: String?
     private(set) var modelStatus = ModelStatus.checking
+    /// The page the local model is reading, as written so far.
+    private(set) var livePreview: LivePreview?
+
+    struct LivePreview: Equatable {
+        let jobID: UUID
+        let pageIndex: Int
+        let markdown: String
+    }
 
     enum ModelStatus: Equatable {
         case checking, ready, notDownloaded
@@ -188,7 +196,7 @@ final class MathNotesViewModel {
         let title = draftTitle
         processingTask = Task { [weak self] in
             guard let self else { return }
-            defer { processingTask = nil }
+            defer { processingTask = nil; livePreview = nil }
             var createdJobID: UUID?
             do {
                 let job = try await store.createJob(title: title, normalizedPages: pages)
@@ -197,7 +205,7 @@ final class MathNotesViewModel {
                 draftPages.removeAll()
                 draftTitle = ""
                 upsert(job)
-                _ = try await pipeline.run(jobID: job.id, progress: progressHandler)
+                _ = try await pipeline.run(jobID: job.id, progress: progressHandler, preview: previewHandler(job.id))
                 await loadJobs()
                 if requestedJobID == job.id { await selectJob(job.id) }
             } catch {
@@ -210,10 +218,10 @@ final class MathNotesViewModel {
         guard processingTask == nil else { return }
         processingTask = Task { [weak self] in
             guard let self else { return }
-            defer { processingTask = nil }
+            defer { processingTask = nil; livePreview = nil }
             activeJobID = job.id
             do {
-                _ = try await pipeline.run(jobID: job.id, progress: progressHandler)
+                _ = try await pipeline.run(jobID: job.id, progress: progressHandler, preview: previewHandler(job.id))
                 await loadJobs()
                 if requestedJobID == job.id { await selectJob(job.id) }
             } catch {
@@ -248,7 +256,7 @@ final class MathNotesViewModel {
         guard processingTask == nil, job.stage == .awaitingCloudConsent else { return }
         processingTask = Task { [weak self] in
             guard let self else { return }
-            defer { processingTask = nil }
+            defer { processingTask = nil; livePreview = nil }
             activeJobID = job.id
             do {
                 // Check the keys first so a missing key leaves the job awaiting the cloud choice.
@@ -256,7 +264,8 @@ final class MathNotesViewModel {
                 _ = try await pipeline.run(
                     jobID: job.id,
                     cloudFallbackAuthorized: true,
-                    progress: progressHandler
+                    progress: progressHandler,
+                    preview: previewHandler(job.id)
                 )
                 await loadJobs()
                 if requestedJobID == job.id { await selectJob(job.id) }
@@ -345,7 +354,7 @@ final class MathNotesViewModel {
         let source = selectedSource
         processingTask = Task { [weak self] in
             guard let self else { return }
-            defer { processingTask = nil }
+            defer { processingTask = nil; livePreview = nil }
             activeJobID = job.id
             do {
                 let updated = try await pipeline.rebuild(
@@ -413,6 +422,14 @@ final class MathNotesViewModel {
 
     private var progressHandler: MathNotePipeline.ProgressHandler {
         { [self] manifest in await receiveProgress(manifest) }
+    }
+
+    private func previewHandler(_ jobID: UUID) -> MathNotePipeline.PreviewHandler {
+        { [self] pageIndex, markdown in await receivePreview(jobID: jobID, pageIndex: pageIndex, markdown: markdown) }
+    }
+
+    private func receivePreview(jobID: UUID, pageIndex: Int, markdown: String) {
+        livePreview = LivePreview(jobID: jobID, pageIndex: pageIndex, markdown: markdown)
     }
 
     private func receiveProgress(_ manifest: MathNoteJobManifest) {

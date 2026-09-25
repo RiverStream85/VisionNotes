@@ -7,7 +7,14 @@ import os
 /// supplies the text layer (boxes and PDF text); this supplies the content.
 protocol PageReconstructing: Sendable {
     /// `nil` when no reconstruction is available; the page then shows Vision text.
-    func markdown(forImageData data: Data) async throws -> String?
+    /// `preview` receives the page as written so far, about once a second.
+    func markdown(forImageData data: Data, preview: (@Sendable (String) async -> Void)?) async throws -> String?
+}
+
+extension PageReconstructing {
+    func markdown(forImageData data: Data) async throws -> String? {
+        try await markdown(forImageData: data, preview: nil)
+    }
 }
 
 /// Firebird on this device. It waits for the model the Academic tab downloads
@@ -15,12 +22,12 @@ protocol PageReconstructing: Sendable {
 struct FirebirdPageReconstructor: PageReconstructing {
     private let model = FirebirdLocalModel()
 
-    func markdown(forImageData data: Data) async throws -> String? {
+    func markdown(forImageData data: Data, preview: (@Sendable (String) async -> Void)?) async throws -> String? {
         guard FirebirdModelAssets.modelDirectory() != nil else { return nil }
         let model = model
         do {
             return try await ForegroundGPUWork.run {
-                try await model.reconstruct(imageData: data).markdown
+                try await model.reconstruct(imageData: data, preview: preview).markdown
             }
         } catch is CancellationError {
             throw CancellationError()

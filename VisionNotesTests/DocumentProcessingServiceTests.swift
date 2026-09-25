@@ -28,7 +28,9 @@ private final class MockTextRecognitionService: TextRecognitionService, @uncheck
 private struct StubReconstructor: PageReconstructing {
     var markdown: String?
 
-    func markdown(forImageData data: Data) async throws -> String? { markdown }
+    func markdown(forImageData data: Data, preview: (@Sendable (String) async -> Void)?) async throws -> String? {
+        markdown
+    }
 }
 
 final class DocumentProcessingServiceTests: XCTestCase {

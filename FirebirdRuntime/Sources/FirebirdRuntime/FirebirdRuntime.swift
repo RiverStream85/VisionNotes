@@ -136,7 +136,7 @@ public actor FirebirdRuntime {
                             progress: (@Sendable (FirebirdProgress) async -> Void)? = nil) async throws -> FirebirdReconstruction {
         guard !isGenerating else { throw FirebirdRuntimeError.busy }
         guard let container, let budget else { throw FirebirdRuntimeError.notLoaded }
-        guard let image = CIImage(data: imageData) else { throw FirebirdRuntimeError.invalidImage }
+        guard CIImage(data: imageData) != nil else { throw FirebirdRuntimeError.invalidImage }
         isGenerating = true
         defer { isGenerating = false }
         try Task.checkCancellation()
@@ -149,13 +149,14 @@ public actor FirebirdRuntime {
         }
         Memory.peakMemory = 0
         let started = Date()
-        let user = Self.makeInput(image: image, prompt: recipe.prompt)
         var partial = ""
         for (index, decoding) in recipe.attempts.enumerated() {
             let attempt = index + 1
             await progress?(.preparingImage)
-            // The prepared input is consumed by generation, so each attempt prepares its own.
-            let input = try await container.prepare(input: user)
+            // Preparation consumes its input and generation consumes the result,
+            // so each attempt builds both from the Sendable image bytes.
+            guard let image = CIImage(data: imageData) else { throw FirebirdRuntimeError.invalidImage }
+            let input = try await container.prepare(input: Self.makeInput(image: image, prompt: recipe.prompt))
             guard input.image != nil else { throw FirebirdRuntimeError.invalidImage }
             let promptTokens = input.text.tokens.size
             let maxTokens = min(budget.maxContext - promptTokens - 1, options.maxOutputTokens ?? Int.max)
@@ -327,7 +328,7 @@ struct FirebirdLogitProcessor: LogitProcessor {
     mutating func prompt(_ prompt: MLXArray) {}
 
     func process(logits: MLXArray) -> MLXArray {
-        var logits = penalty?.process(logits: logits) ?? logits
+        let logits = penalty?.process(logits: logits) ?? logits
         if let noRepeat {
             let banned = noRepeat.bannedTokens(after: history)
             if !banned.isEmpty {

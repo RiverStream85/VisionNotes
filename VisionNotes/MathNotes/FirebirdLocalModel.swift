@@ -40,29 +40,30 @@ struct FirebirdLocalModel: Sendable {
         let logger = Logger(subsystem: "VisionNotes", category: "FirebirdSetup")
         let runtime = FirebirdRuntime.shared
         if !(await runtime.isLoaded()) {
-            // Fetch public model assets only on first setup. No page is uploaded.
-            // Crypto/authentication errors deliberately propagate unchanged.
-            do {
-                await progress?("Checking / downloading model · first setup")
-                logger.notice("Checking or downloading encrypted model assets")
-                try await FirebirdModelAssets.shared.ensureInstalled()
-                logger.notice("Encrypted model assets ready")
-            } catch is CancellationError { throw CancellationError() }
-            catch let error as URLError {
-                if error.code == .cancelled { throw CancellationError() }
-                throw MathNoteError.localInferenceUnavailable
-            }
-            await progress?("Decrypting local model")
-            logger.notice("Decrypting model for loading")
-            let directory = try await FirebirdModelAssets.shared.materialize()
-            defer { try? FileManager.default.removeItem(at: directory) }
-            logger.notice("Model decryption complete")
-            await progress?("Loading local model")
-            do {
-                try await runtime.load(directory: directory)
-            } catch FirebirdRuntimeError.insufficientMemory(let available, let required) {
-                logger.error("Not enough memory for local model: available MiB \(available / 1_048_576), required MiB \(required / 1_048_576)")
-                throw MathNoteError.localInferenceUnavailable
+            if let bundled = FirebirdModelAssets.bundledModelDirectory() {
+                await progress?("Loading bundled local model")
+                logger.notice("Loading model bundled with the app")
+                try await Self.load(runtime, directory: bundled, logger: logger)
+            } else {
+                // Fetch public model assets only on first setup. No page is uploaded.
+                // Crypto/authentication errors deliberately propagate unchanged.
+                do {
+                    await progress?("Checking / downloading model · first setup")
+                    logger.notice("Checking or downloading encrypted model assets")
+                    try await FirebirdModelAssets.shared.ensureInstalled()
+                    logger.notice("Encrypted model assets ready")
+                } catch is CancellationError { throw CancellationError() }
+                catch let error as URLError {
+                    if error.code == .cancelled { throw CancellationError() }
+                    throw MathNoteError.localInferenceUnavailable
+                }
+                await progress?("Decrypting local model")
+                logger.notice("Decrypting model for loading")
+                let directory = try await FirebirdModelAssets.shared.materialize()
+                defer { try? FileManager.default.removeItem(at: directory) }
+                logger.notice("Model decryption complete")
+                await progress?("Loading local model")
+                try await Self.load(runtime, directory: directory, logger: logger)
             }
         }
         do {
@@ -79,6 +80,15 @@ struct FirebirdLocalModel: Sendable {
             throw MathNoteError.localInferenceUnavailable
         }
         #endif
+    }
+
+    private static func load(_ runtime: FirebirdRuntime, directory: URL, logger: Logger) async throws {
+        do {
+            try await runtime.load(directory: directory)
+        } catch FirebirdRuntimeError.insufficientMemory(let available, let required) {
+            logger.error("Not enough memory for local model: available MiB \(available / 1_048_576), required MiB \(required / 1_048_576)")
+            throw MathNoteError.localInferenceUnavailable
+        }
     }
 
     /// Status text only; page content never enters a status update.

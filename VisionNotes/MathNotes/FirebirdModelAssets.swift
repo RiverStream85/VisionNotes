@@ -47,6 +47,21 @@ actor FirebirdModelAssets {
 
     private func modelLock() throws -> Lock { try Self.bundledLock() }
 
+    /// Development builds may ship the pinned model inside the app (the
+    /// "Bundle Firebird model" build phase copies work/FirebirdModel). The app
+    /// bundle is code-signed and read-only, so those files are loaded in place:
+    /// no download, no encrypted install and no temporary plaintext copy.
+    nonisolated static func bundledModelDirectory() -> URL? {
+        guard let directory = Bundle.main.url(forResource: "FirebirdModel", withExtension: nil),
+              let lock = try? bundledLock() else { return nil }
+        for asset in lock.assets {
+            let path = directory.appendingPathComponent(asset.name).path
+            let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber)?.intValue
+            guard size == asset.bytes else { return nil }
+        }
+        return directory
+    }
+
     func ensureInstalled() async throws {
         if let installation { return try await installation.value }
         let task = Task { try await self.install() }

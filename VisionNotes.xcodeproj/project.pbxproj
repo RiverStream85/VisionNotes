@@ -428,6 +428,7 @@
 				AEC497F370DDBAD803AF44CD /* Sources */,
 				819DFE531B15C2032D92F353 /* Frameworks */,
 				9AB79077DFDD75F158996501 /* Resources */,
+				FB0000000000000000000010 /* Bundle Firebird model */,
 			);
 			buildRules = (
 			);
@@ -530,6 +531,29 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		FB0000000000000000000010 /* Bundle Firebird model */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Bundle Firebird model";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Development builds may ship the pinned Firebird model inside the app so a\n# device can run local reconstruction without the 1.8 GB first-run download.\n# Put the model at work/FirebirdModel (python3 Tools/download_firebird_model.py)\n# or set FIREBIRD_BUNDLE_MODEL_DIR. Without it the app downloads the model.\nMODEL_SRC=\"${FIREBIRD_BUNDLE_MODEL_DIR:-${SRCROOT}/work/FirebirdModel}\"\nDEST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/FirebirdModel\"\nif [ \"${PLATFORM_NAME}\" != \"iphonesimulator\" ] && [ -f \"${MODEL_SRC}/model.safetensors\" ]; then\n  mkdir -p \"${DEST}\"\n  rsync -a --delete --exclude '*.partial' \"${MODEL_SRC}/\" \"${DEST}/\"\n  echo \"Bundled Firebird model from ${MODEL_SRC}\"\nelse\n  rm -rf \"${DEST}\"\nfi\n";
+			showEnvVarsInLog = 0;
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		0EF4E3D5BD466F076C3DEDDD /* Sources */ = {
@@ -740,6 +764,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = VisionNotes/VisionNotes.entitlements;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
@@ -788,6 +813,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = VisionNotes/VisionNotes.entitlements;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";

@@ -19,20 +19,33 @@ actor FirebirdModelAssets {
             .appendingPathComponent("VisionNotes/Models/Qwen3VL", isDirectory: true)
     }
 
-    private func modelLock() throws -> Lock {
+    /// Files the local runtime reads. Any pinned checkpoint must provide them.
+    private static let requiredAssets: Set<String> = [
+        "config.json", "generation_config.json", "preprocessor_config.json",
+        "tokenizer.json", "tokenizer_config.json"
+    ]
+
+    /// The bundled lock is the single source of the model name and revision.
+    nonisolated static func bundledLock() throws -> Lock {
         guard let url = Bundle.main.url(forResource: "FirebirdModel.lock", withExtension: "json") else {
             throw AssetError.missingLock
         }
         let lock = try JSONDecoder().decode(Lock.self, from: Data(contentsOf: url))
-        guard lock.model == "mlx-community/Qwen3-VL-2B-Instruct-4bit",
-              lock.revision == "9c4f5209e57b31f4b9dfba735de3fb983739c9cc",
-              lock.assets.count == 8,
-              Set(lock.assets.map(\.name)).count == lock.assets.count,
-              lock.assets.allSatisfy({ !$0.name.contains("/") && !$0.name.contains("..") && $0.bytes > 0 && $0.bytes < 2_000_000_000 && $0.sha256.count == 64 }) else {
+        let names = Set(lock.assets.map(\.name))
+        let hex = CharacterSet(charactersIn: "0123456789abcdef")
+        guard lock.model.split(separator: "/").count == 2,
+              lock.revision.count == 40, CharacterSet(charactersIn: lock.revision).isSubset(of: hex),
+              names.count == lock.assets.count,
+              requiredAssets.isSubset(of: names),
+              names.contains(where: { $0.hasSuffix(".safetensors") }),
+              lock.assets.allSatisfy({ !$0.name.contains("/") && !$0.name.contains("..") && $0.bytes > 0 && $0.bytes < 8_000_000_000
+                  && $0.sha256.count == 64 && CharacterSet(charactersIn: $0.sha256).isSubset(of: hex) }) else {
             throw AssetError.invalidLock
         }
         return lock
     }
+
+    private func modelLock() throws -> Lock { try Self.bundledLock() }
 
     func ensureInstalled() async throws {
         if let installation { return try await installation.value }

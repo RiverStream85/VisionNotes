@@ -48,7 +48,7 @@ public struct Qwen3VLProcessor: UserInputProcessor {
             width: Int(extent.width),
             factor: config.patchSize * config.mergeSize,
             minPixels: config.size.minPixels,
-            maxPixels: min(config.size.maxPixels, 524_288))
+            maxPixels: config.size.maxPixels)
 
         let targetSize = CGSize(width: resizedWidth, height: resizedHeight)
 
@@ -114,7 +114,7 @@ public struct Qwen3VLProcessor: UserInputProcessor {
                             width: Int(size.width),
                             factor: config.patchSize * config.mergeSize,
                             minPixels: config.minPixels,
-                            maxPixels: min(config.maxPixels, 1_048_576))
+                            maxPixels: config.maxPixels)
                         resizedSize = CGSize(width: width, height: height)
                     }
                     let finalImage = preprocess(image: processed, resizedSize: resizedSize)
@@ -535,14 +535,22 @@ enum Qwen3VLVision {
             keys = keys.reshaped(1, sequenceLength, numHeads, headDim).transposed(0, 2, 1, 3)
             values = values.reshaped(1, sequenceLength, numHeads, headDim).transposed(0, 2, 1, 3)
 
-            var mask = ones([1, sequenceLength, sequenceLength], dtype: queries.dtype)
-            mask = mask * MLXArray(-1e9, dtype: queries.dtype)
-
+            // A single image attends to all of its patches, so its additive
+            // mask is all zeros. Skip the dense N×N mask so SDPA can use its
+            // memory-efficient unmasked kernel at high resolution.
             let seqlens = cuSeqlens.asArray(Int.self)
-            for idx in 1 ..< seqlens.count {
-                let start = seqlens[idx - 1]
-                let end = seqlens[idx]
-                mask[0..., start ..< end, start ..< end] = MLXArray(0, dtype: queries.dtype)
+            let attentionMask: MLXFast.ScaledDotProductAttentionMaskMode
+            if seqlens == [0, sequenceLength] {
+                attentionMask = .none
+            } else {
+                var mask = ones([1, sequenceLength, sequenceLength], dtype: queries.dtype)
+                mask = mask * MLXArray(-1e9, dtype: queries.dtype)
+                for idx in 1 ..< seqlens.count {
+                    let start = seqlens[idx - 1]
+                    let end = seqlens[idx]
+                    mask[0..., start ..< end, start ..< end] = MLXArray(0, dtype: queries.dtype)
+                }
+                attentionMask = .array(mask)
             }
 
             let attended = MLXFast.scaledDotProductAttention(
@@ -550,7 +558,7 @@ enum Qwen3VLVision {
                 keys: keys,
                 values: values,
                 scale: scale,
-                mask: .array(mask)
+                mask: attentionMask
             )
             .transposed(0, 2, 1, 3)
             .reshaped(sequenceLength, -1)
@@ -866,16 +874,16 @@ enum Qwen3VLVision {
                 hiddenStates = block(hiddenStates, cuSeqlens: cuSeqlens, rotaryPosEmb: rotaryEmbeds)
                 if let dsIndex = deepstackVisualIndexes.firstIndex(of: index) {
                     let feature = deepstackMergers[dsIndex](hiddenStates)
-                    eval(feature)
+                    firebirdPrefillEval([feature])
                     deepstackOutputs.append(feature)
                 }
                 // Bound lazy vision graphs to one block instead of retaining
                 // all encoder activations until the first language-model token.
-                eval(hiddenStates)
+                firebirdPrefillEval([hiddenStates])
             }
 
             hiddenStates = merger(hiddenStates)
-            eval(hiddenStates)
+            firebirdPrefillEval([hiddenStates])
             return (hiddenStates, deepstackOutputs)
         }
 
@@ -978,6 +986,8 @@ enum Qwen3VLLanguage {
         let headDim: Int
         let scale: Float
         let epsilon: Float
+        /// Set once after loading; see `Qwen3VL.setDecodeAttention`.
+        var decodeAttention = FirebirdDecodeAttention.mlx
 
         @ModuleInfo(key: "q_proj") var wq: Linear
         @ModuleInfo(key: "k_proj") var wk: Linear
@@ -1049,12 +1059,13 @@ enum Qwen3VLLanguage {
 
             let (cosValues, sinValues) = rotaryEmbedding(positionIds: positionIds!, dtype: x.dtype)
 
-            // The actual autoregressive path uses our single-dispatch Q/K
-            // RMSNorm + multimodal RoPE + attention kernel. Prefill stays MLX.
-            if !FirebirdAttentionDiagnostics.useReference,
-               batch == 1, length == 1, headDim == 128, mask == nil,
+            // Opt-in experimental decode path: one dispatch for Q/K RMSNorm,
+            // multimodal RoPE and attention. Default decode and prefill use MLX.
+            if decodeAttention == .fusedExperimental,
+               batch == 1, length == 1, mask == nil,
                let simpleCache = cache as? KVCacheSimple,
-               simpleCache.offset < FirebirdFusedAttention.maximumContext {
+               FirebirdFusedAttention.supports(heads: heads, kvHeads: kvHeads, headDim: headDim,
+                                               history: simpleCache.offset) {
                 let attended = FirebirdFusedAttention.call(
                     queries: queries, keys: keys, values: values,
                     qWeight: qNorm.weight, kWeight: kNorm.weight,
@@ -1193,8 +1204,8 @@ enum Qwen3VLLanguage {
                         visualEmbeds: embeds[index])
                 }
                 if hidden.dim(1) > 1 {
-                    eval(hidden)
-                    if let layerCache { eval(layerCache.state) }
+                    firebirdPrefillEval([hidden])
+                    if let layerCache { firebirdPrefillEval(layerCache.state) }
                 }
             }
 
@@ -1557,6 +1568,11 @@ public final class Qwen3VL: Module, VLMModel, KVCacheDimensionProvider {
         languageModel.model.layers
     }
 
+    /// Selects the single-token decode attention for every language layer.
+    func setDecodeAttention(_ mode: FirebirdDecodeAttention) {
+        for layer in languageModel.model.layers { layer.attention.decodeAttention = mode }
+    }
+
     private func mergeInputIdsWithImageFeatures(
         imageFeatures: MLXArray,
         inputEmbeds: MLXArray,
@@ -1667,6 +1683,9 @@ public final class Qwen3VL: Module, VLMModel, KVCacheDimensionProvider {
         {
             let textEmbeds = languageModel.model.embedTokens(inputIds)
             let (visionHidden, deepstackOutputs) = visionModel(pixelValues, gridTHW: framesList)
+            // Cancellation skips the remaining prefill evaluations; stop before
+            // anything below forces the lazy graph onto the GPU.
+            try Task.checkCancellation()
             let mergeSize = config.visionConfiguration.spatialMergeSize
             let splits = framesList.map { $0.product / (mergeSize * mergeSize) }
             let splitIndices = cumulativeSplitIndices(from: splits)
@@ -1707,6 +1726,7 @@ public final class Qwen3VL: Module, VLMModel, KVCacheDimensionProvider {
             imageGridTHW: imageFrames,
             videoGridTHW: videoFrames)
 
+        try Task.checkCancellation()
         return .logits(languageOutput)
     }
 

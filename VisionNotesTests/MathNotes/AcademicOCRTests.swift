@@ -341,7 +341,7 @@ final class AcademicOCRTests: XCTestCase {
         let cachedData = try JSONEncoder().encode(cachedPage)
         try await store.write(
             cachedData,
-            relativePath: "firebird-qwen3vl-9c4f5209-input-v2-page-001.json",
+            relativePath: FirebirdLocalModel.checkpointPath(pageIndex: 0),
             jobID: job.id
         )
         let renderer = RendererSpy()
@@ -360,7 +360,7 @@ final class AcademicOCRTests: XCTestCase {
 
         let paused = try await store.load(job.id)
         let preservedCheckpoint = try await store.read(
-            relativePath: "firebird-qwen3vl-9c4f5209-input-v2-page-001.json",
+            relativePath: FirebirdLocalModel.checkpointPath(pageIndex: 0),
             jobID: job.id
         )
         let cloudOCRExists = await store.exists(relativePath: "cloud-ocr.json", jobID: job.id)

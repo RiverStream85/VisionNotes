@@ -7,15 +7,15 @@ Scan/import, source editing, comparison and the existing Academic exports remain
 1. Seal normalized pages in the job store.
 2. On first setup, fetch the pinned model/tokenizer assets over Wi-Fi without sending page content. Stream directly into AES-GCM chunks and verify exact byte counts/SHA-256 before writing asset receipts.
 3. On later launches, open the encrypted app-container assets locally. Temporarily decrypt into protected files, load/evaluate MLX tensors and the tokenizer, then remove those files.
-4. Run the actual image encoder and autoregressive decoder. Single-token attention uses the authored Metal shader; prefill uses MLX. No rule-based text formatter or synthetic weights replace the model.
+4. Run the actual image encoder and autoregressive decoder with greedy decoding, a repetition-loop detector and one retry. Attention uses MLX by default; the authored Metal shader is opt-in. No rule-based text formatter or synthetic weights replace the model.
 5. Seal each page's generated Markdown with the pinned model revision in its checkpoint. A versioned cache filename prevents reuse of the removed attention prototype's results. A checkpoint must match the current page index and model identifier.
 6. Render the existing Markdown/LaTeX/HTML/PDF/facsimile/ZIP outputs locally, then seal them. Explicit sharing materializes the selected output temporarily.
 
 ## Fusion boundary
 
-The custom shader is `FirebirdRuntime/Sources/FirebirdRuntime/Kernels/FirebirdAttention.metal.txt`. It fuses **Q/K per-head RMSNorm, multimodal RoPE, QKᵀ attention scores, stable softmax and PV accumulation** in one dispatch for batch-one single-token decode. Quantized QKV projection, input-layer RMSNorm, cache append, output projection, the MLP and vision/prefill computations remain separate. The integration does not claim a single-dispatch full transformer layer or a measured speedup.
+The custom shader is `FirebirdRuntime/Sources/FirebirdRuntime/Kernels/FirebirdAttention.metal.txt`. It is disabled by default and is enabled only through `FirebirdDecodeAttention.fusedExperimental` after a numerical self-check on the device. It fuses **Q/K per-head RMSNorm, multimodal RoPE, QKᵀ attention scores, stable softmax and PV accumulation** in one dispatch for batch-one single-token decode. Quantized QKV projection, input-layer RMSNorm, cache append, output projection, the MLP and vision/prefill computations remain separate. The integration does not claim a single-dispatch full transformer layer or a measured speedup.
 
-The context limit is 4,096 tokens, output limit equal to the remaining context after the prepared image/prompt and page input limit 524,288 pixels. Truncation is an inference failure rather than a completed transcription. The target is iPhone 17 Pro; device memory/latency and handwritten-math accuracy remain to be validated.
+Image resolution and context length come from a device budget chosen from available process memory; see README. Truncation or an unbroken repetition loop is an inference failure rather than a completed transcription. Device memory/latency and handwritten-math accuracy remain to be validated on each target phone.
 
 ## Encryption and cloud consent
 

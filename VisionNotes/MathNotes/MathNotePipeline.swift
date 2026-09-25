@@ -231,7 +231,7 @@ struct MathNotePipeline: Sendable {
         var refinements: [MathNotePageRefinement] = []
         for pageIndex in manifest.pages.indices {
             try Task.checkCancellation()
-            let cachePath = String(format: "firebird-qwen3vl-9c4f5209-input-v2-page-%03d.json", pageIndex + 1)
+            let cachePath = FirebirdLocalModel.checkpointPath(pageIndex: pageIndex)
             if await store.exists(relativePath: cachePath, jobID: manifest.id) {
                 let cached = try Self.decoder.decode(
                     MathNotePageRefinement.self,
@@ -273,12 +273,17 @@ struct MathNotePipeline: Sendable {
                         jobID: manifest.id, pageIndex: pageIndex, pageCount: manifest.pageCount,
                         localFraction: 0.1, detail: detail, progress: progress)
                 }
-            } catch FirebirdLocalFailure.outputLimit(let markdown) {
+            } catch FirebirdLocalFailure.incomplete(let reason, let markdown) {
                 // An incomplete draft must never become a completed page checkpoint.
                 try await store.write(Data(markdown.utf8),
                     relativePath: String(format: "local-incomplete-page-%03d.md", pageIndex + 1),
                     jobID: manifest.id, overwrite: true)
-                throw MathNoteError.message("Local reconstruction reached its output limit before finishing. An incomplete draft was saved encrypted. Try a smaller section of this page; no data was uploaded.")
+                switch reason {
+                case .outputLimit:
+                    throw MathNoteError.message("Local reconstruction reached its output limit before finishing. An incomplete draft was saved encrypted. Try a smaller section of this page; no data was uploaded.")
+                case .repetitionLoop:
+                    throw MathNoteError.message("Local reconstruction kept repeating the same text, including after a retry. An incomplete draft was saved encrypted. Try a clearer photo or a smaller section of this page; no data was uploaded.")
+                }
             }
             let page = MathNotePageRefinement(
                 pageIndex: pageIndex,

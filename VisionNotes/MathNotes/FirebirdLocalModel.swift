@@ -1,10 +1,12 @@
+import FirebirdCore
 import Foundation
 import Metal
 import OSLog
 import FirebirdRuntime
 
 enum FirebirdLocalFailure: Error {
-    case outputLimit(partialMarkdown: String)
+    /// Generation stopped before a stop token; the partial text is a draft only.
+    case incomplete(FirebirdIncompleteReason, partialMarkdown: String)
 }
 
 struct FirebirdCompletion: Sendable {
@@ -15,8 +17,19 @@ struct FirebirdCompletion: Sendable {
 /// Real image-conditioned generation using the pinned Qwen3-VL checkpoint.
 struct FirebirdLocalModel: Sendable {
     static let modelName = "Qwen3-VL-2B-Instruct (4-bit, local Firebird)"
+    static let recipe = FirebirdRecipe.academicTranscription
 
-    static let modelIdentifier = FirebirdRuntime.modelIdentifier + "@9c4f5209e57b31f4b9dfba735de3fb983739c9cc/input-v2"
+    /// Derived from the bundled lock and the recipe, so a new revision or
+    /// decoding change invalidates page checkpoints without editing call sites.
+    static let identity: FirebirdModelIdentity = {
+        let lock = try? FirebirdModelAssets.bundledLock()
+        return FirebirdModelIdentity(repository: lock?.model ?? "unavailable",
+            revision: lock?.revision ?? "unavailable", recipeVersion: recipe.version)
+    }()
+
+    static var modelIdentifier: String { identity.identifier }
+
+    static func checkpointPath(pageIndex: Int) -> String { identity.checkpointPath(pageIndex: pageIndex) }
 
     func reconstruct(imageData: Data, progress: (@Sendable (String) async -> Void)? = nil) async throws -> FirebirdCompletion {
         #if targetEnvironment(simulator)
@@ -45,20 +58,39 @@ struct FirebirdLocalModel: Sendable {
             defer { try? FileManager.default.removeItem(at: directory) }
             logger.notice("Model decryption complete")
             await progress?("Loading local model")
-            try await runtime.load(directory: directory)
+            do {
+                try await runtime.load(directory: directory)
+            } catch FirebirdRuntimeError.insufficientMemory(let available, let required) {
+                logger.error("Not enough memory for local model: available MiB \(available / 1_048_576), required MiB \(required / 1_048_576)")
+                throw MathNoteError.localInferenceUnavailable
+            }
         }
         do {
-            let markdown = try await runtime.reconstruct(imageData: imageData, progress: progress)
-            return FirebirdCompletion(markdown: Self.normalizeMarkdown(markdown),
+            let result = try await runtime.reconstruct(imageData: imageData, recipe: Self.recipe) { event in
+                await progress?(Self.describe(event))
+            }
+            return FirebirdCompletion(markdown: Self.normalizeMarkdown(result.markdown),
                 modelIdentifier: Self.modelIdentifier)
         } catch is CancellationError {
             throw CancellationError()
-        } catch FirebirdRuntimeError.outputLimit(let markdown) {
-            throw FirebirdLocalFailure.outputLimit(partialMarkdown: markdown)
+        } catch FirebirdRuntimeError.incomplete(let reason, let markdown) {
+            throw FirebirdLocalFailure.incomplete(reason, partialMarkdown: markdown)
         } catch is FirebirdRuntimeError {
             throw MathNoteError.localInferenceUnavailable
         }
         #endif
+    }
+
+    /// Status text only; page content never enters a status update.
+    static func describe(_ event: FirebirdProgress) -> String {
+        switch event {
+        case .preparingImage: "Preparing page image"
+        case .readingPage(let attempt): attempt == 1
+            ? "Reading page · waiting for first text"
+            : "Retrying page after repeated output · attempt \(attempt)"
+        case .generating(let text, let elapsed, _): "Reconstructing · \(text.count) characters · \(Int(elapsed))s"
+        case .finishing: "Checking completed reconstruction"
+        }
     }
 
     /// Some local generations wrap equations in a LaTeX code fence despite the

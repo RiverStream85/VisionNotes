@@ -2,17 +2,24 @@ import Foundation
 import MLX
 import MLXLMCommon
 
-// Internal test-only switch; normal app execution always uses fused decode.
-enum FirebirdAttentionDiagnostics {
-    @TaskLocal static var useReference = false
-    @TaskLocal static var outputLimit: Int? = nil
-    @TaskLocal static var capturePartial: (@Sendable (String) -> Void)? = nil
+/// Single-token decode attention. `.mlx` uses MLX's own SDPA, which works for
+/// any head layout and context length. `.fusedExperimental` uses the authored
+/// kernel below and stays opt-in until device measurements show a speedup.
+public enum FirebirdDecodeAttention: String, Sendable, CaseIterable {
+    case mlx
+    case fusedExperimental
 }
 
-/// Single-token GQA attention specialized for the pinned Qwen3-VL-2B model.
+/// Single-token GQA attention specialized for 128-dimensional heads.
 /// Cache append and QKV/output projection are separate from this fused dispatch.
 enum FirebirdFusedAttention {
+    /// Bounded by the kernel's threadgroup score buffer.
     static let maximumContext = 4096
+
+    /// Shapes this kernel implements; anything else falls back to MLX.
+    static func supports(heads: Int, kvHeads: Int, headDim: Int, history: Int) -> Bool {
+        headDim == 128 && kvHeads > 0 && heads % kvHeads == 0 && history < maximumContext
+    }
     private static let kernel: MLXFast.MLXFastKernel = {
         // This is a kernel body wrapped by MLX at runtime, not a standalone Metal source.
         // The .txt suffix keeps Xcode from compiling it as a separate translation unit.
@@ -47,9 +54,9 @@ enum FirebirdFusedAttention {
     }
 }
 
-#if DEBUG
 extension FirebirdFusedAttention {
-    /// Exercise the actual device kernel against MLX, without using any note content.
+    /// Exercise the kernel on this device's GPU against MLX, without using any
+    /// note content. Runs once at load before the fused path is enabled.
     static func validateNumerics() throws {
         for count in [0, 127, 1023] {
             func array(_ shape: [Int], seed: Int) -> MLXArray {
@@ -90,4 +97,3 @@ extension FirebirdFusedAttention {
         }
     }
 }
-#endif

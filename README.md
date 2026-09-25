@@ -20,13 +20,31 @@ The first Academic attempt provisions the pinned public model from Hugging Face 
 
 Once setup succeeds, later process cold starts use the encrypted container files without a model-host request. Loading temporarily materializes file-protected model files, verifies their hashes again, evaluates the model tensors, and deletes the temporary files. Temporary copies are also purged on app suspension and next startup. The first installation requires connectivity; a fresh installation is not advertised as ready to run offline.
 
-The target device is **iPhone 17 Pro**. The runtime uses the actual vision encoder, tokenizer, 28-layer language model, KV cache and autoregressive generation. Image input is capped at 524,288 pixels, total attention context at 4,096 tokens, and generation at the remaining context budget after the image/prompt tokens. Output that hits the generation limit is treated as incomplete, not silently saved as a successful transcription. Incomplete text is retained as an encrypted draft. These budgets require real-device quality and memory testing.
+The runtime uses the actual vision encoder, tokenizer, 28-layer language model, KV cache and autoregressive generation.
+Image resolution and context length are chosen at load time from the memory the process may use (`os_proc_available_memory`), not from a device model name.
+`FirebirdCore/FirebirdDeviceBudget.swift` defines four tiers, from 393,216 pixels / 3,072 tokens up to 1,048,576 pixels / 6,144 tokens; the default ceiling is 786,432 pixels / 5,120 tokens until the highest tier is measured on a phone.
+A device that cannot hold the weights plus one page reports local inference unavailable instead of risking a memory termination.
+The app requests `com.apple.developer.kernel.increased-memory-limit`, so the signing team's App ID needs the Increased Memory Limit capability.
+The per-pixel and fixed memory reserves in that file are uncalibrated estimates; replace them with peaks measured by the evaluation harness on each target device.
+Output that hits the generation limit, or keeps repeating after a retry, is treated as incomplete and kept as an encrypted draft, not saved as a successful transcription.
 
 Upstream model: [Qwen3-VL-2B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct). Pinned conversion: [mlx-community/Qwen3-VL-2B-Instruct-4bit](https://huggingface.co/mlx-community/Qwen3-VL-2B-Instruct-4bit/tree/9c4f5209e57b31f4b9dfba735de3fb983739c9cc), Apache-2.0. The model weights are downloaded, not committed to this repository.
 
-## Custom Metal fusion
+## Decoding
 
-`FirebirdRuntime/Sources/FirebirdRuntime/Kernels/FirebirdAttention.metal.txt` contains an authored Metal kernel, compiled through MLX's custom-kernel API. The vendored Qwen attention implementation calls it on batch-one, single-token decode with a standard KV cache. In one GPU dispatch it performs:
+Pages are decoded greedily, so identical input yields identical output and can be regression-tested.
+No penalty is applied to prompt tokens: LaTeX legitimately repeats `\`, `{`, `}`, `_`, `^` and `$`, and the earlier presence penalty of 1.5 over prompt plus output suppressed exactly those tokens.
+A repetition-loop detector stops a page whose tail repeats the same block, and the page is retried once with a mild repetition penalty over the last 64 generated tokens only.
+The prompt and decoding attempts live in `FirebirdCore/FirebirdRecipe.swift`; its version is part of the checkpoint identifier, so changing the recipe re-runs pages instead of reusing stale results.
+The model identifier and checkpoint file names are derived from `FirebirdModel.lock.json` plus the recipe version.
+
+## Custom Metal fusion (opt-in)
+
+Single-token decode uses MLX's own scaled-dot-product attention by default, which works for any head layout and context length.
+The authored kernel is available as `FirebirdDecodeAttention.fusedExperimental` and is numerically checked against MLX on the device's GPU before it is enabled; a failed check falls back to MLX.
+It stays opt-in because its speed is unmeasured and it has known costs: it reads the KV history through a row-contiguous view, which likely copies the cache every step, runs only 16 × 128 threads, and is limited to 4,096 tokens and 128-dimensional heads.
+
+`FirebirdRuntime/Sources/FirebirdRuntime/Kernels/FirebirdAttention.metal.txt` contains the kernel, compiled through MLX's custom-kernel API. When enabled, the vendored Qwen attention implementation calls it on batch-one, single-token decode with a standard KV cache. In one GPU dispatch it performs:
 
 1. Query/key per-head RMSNorm.
 2. Multimodal RoPE using the model's position-dependent cosines/sines.
@@ -65,8 +83,9 @@ Optional provider credentials are entered in **Cloud fallback keys** and stored 
 Open `VisionNotes.xcodeproj`, choose the VisionNotes scheme and a device. The local `FirebirdRuntime` Swift package pins MLX Swift LM 2.31.3, MLX Swift 0.31.3 and Swift Transformers 1.2.0. It requires a Swift 6.1-capable Xcode and an installed Metal Toolchain. A signing team is needed for a physical iPhone.
 
 The iOS simulator can exercise application UI/storage/export flows, but cannot validate this MLX inference path. Simulator Academic attempts report local inference unavailable without downloading weights; they never silently switch to cloud. Run actual model and kernel tests on a Metal-capable Mac or supported iPhone. Keep the app foregrounded during local reconstruction; sustained background inference is not implemented.
+Leaving the foreground cancels the job; decode stops after the current token, and remaining prefill evaluations are skipped, because iOS rejects GPU work submitted from the background. Weight loading is not interruptible.
 
-Run app tests with Command-U. Kernel numerical tests live in the FirebirdRuntime package and compare fused/unfused outputs and KV updates for float32/float16/bfloat16 across cache boundaries. They need GPU access:
+Run app tests with Command-U. The `FirebirdCoreTests` target (recipe, device budget, loop detection, metrics) has no MLX dependency. Kernel numerical tests live in the FirebirdRuntime package and compare fused/unfused outputs and KV updates for float32/float16/bfloat16 across cache boundaries. They need GPU access:
 
 ```sh
 cd FirebirdRuntime
@@ -79,7 +98,8 @@ For a developer-only real-model reconstruction test, download the pinned assets 
 python3 Tools/download_firebird_model.py
 ```
 
-Then run `ReconstructionTests` with `FIREBIRD_MODEL_DIR`, `FIREBIRD_TEST_IMAGE` and `FIREBIRD_EXPECTED_LATEX` set to a local model folder, a handwritten image and a known formula fragment. The application uses its own encrypted streaming installer; the developer cache is not the app storage format.
+Then run `ReconstructionTests` with `FIREBIRD_MODEL_DIR`, `FIREBIRD_TEST_IMAGE` and `FIREBIRD_EXPECTED_LATEX` set to a local model folder, a handwritten image and a known formula fragment.
+For a dataset evaluation, describe samples and optional reference transcriptions in the git-ignored `work/Evaluation/config.json` (format documented above `testLocalEvaluation`); the test writes each transcription plus a `report.json` with character error rate, time to first text, decode tokens per second, peak MLX memory and retry count for every attention mode listed. The application uses its own encrypted streaming installer; the developer cache is not the app storage format.
 
 Remaining acceptance includes: a first install on Wi-Fi, an offline process restart on iPhone 17 Pro, known handwritten-math samples, checking cloud traffic is absent before consent, and inspecting the app container for encrypted persistent content.
 

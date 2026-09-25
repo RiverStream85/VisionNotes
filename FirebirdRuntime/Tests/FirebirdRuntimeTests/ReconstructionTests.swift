@@ -1,6 +1,7 @@
 import XCTest
 import Metal
 import CoreImage
+import FirebirdCore
 import MLXLMCommon
 import MLX
 @testable import FirebirdRuntime
@@ -8,7 +9,7 @@ import MLX
 final class ReconstructionTests: XCTestCase {
     func testReconstructionInputIncludesImageInProcessorAndChat() {
         let image = CIImage(color: .white).cropped(to: CGRect(x: 0, y: 0, width: 32, height: 32))
-        let input = FirebirdRuntime.makeInput(image: image)
+        let input = FirebirdRuntime.makeInput(image: image, prompt: FirebirdRecipe.academicTranscription.prompt)
         XCTAssertEqual(input.images.count, 1, "The processor must receive the actual image")
         guard case .chat(let messages) = input.prompt else {
             return XCTFail("Reconstruction must use structured multimodal chat")
@@ -17,16 +18,33 @@ final class ReconstructionTests: XCTestCase {
         XCTAssertEqual(messages[0].images.count, 1, "The template must receive an image placeholder")
     }
 
-    func testPresencePenaltyAcceptsBatchedImagePrompt() throws {
+    func testGeneratedTokenPenaltyIgnoresPrompt() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("Metal GPU required") }
-        var processor = FirebirdPresencePenalty()
+        var processor = GeneratedTokenPenalty(FirebirdPenalty(kind: .presence, value: 1.5, window: 64))
         processor.prompt(MLXArray([Int32(1), 2, 2], [1, 3]))
+        let untouched = processor.process(logits: MLXArray.zeros([1, 8]))
+        eval(untouched)
+        XCTAssertEqual(untouched[0, 1].item(Float.self), 0, "Prompt tokens must not be penalized")
         processor.didSample(token: MLXArray(Int32(3)))
         let output = processor.process(logits: MLXArray.zeros([1, 8]))
         eval(output)
-        XCTAssertEqual(output[0, 0].item(Float.self), 0)
-        XCTAssertEqual(output[0, 2].item(Float.self), -1.5)
+        XCTAssertEqual(output[0, 2].item(Float.self), 0)
         XCTAssertEqual(output[0, 3].item(Float.self), -1.5)
+    }
+
+    func testProcessorConfigurationCapsPixels() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let json = """
+            {"image_mean": [0.5, 0.5, 0.5], "image_std": [0.5, 0.5, 0.5], "min_pixels": 3136,
+             "max_pixels": 12845056, "merge_size": 2, "patch_size": 16, "temporal_patch_size": 2,
+             "image_processor_type": "Qwen2VLImageProcessorFast"}
+            """
+        try Data(json.utf8).write(to: directory.appendingPathComponent("preprocessor_config.json"))
+        let config = try FirebirdRuntime.processorConfiguration(in: directory, maxPixels: 786_432)
+        XCTAssertEqual(config.maxPixels, 786_432)
+        XCTAssertEqual(config.minPixels, 3136)
     }
 
     /// Opt-in real-checkpoint integration test. Use a handwritten sample and a
@@ -42,56 +60,91 @@ final class ReconstructionTests: XCTestCase {
         let runtime = FirebirdRuntime()
         try await runtime.load(directory: URL(fileURLWithPath: modelPath))
         let output = try await runtime.reconstruct(imageData: Data(contentsOf: URL(fileURLWithPath: imagePath)))
-        XCTAssertTrue(output.contains(expected), "Known formula was not reconstructed")
+        XCTAssertTrue(output.markdown.contains(expected), "Known formula was not reconstructed")
     }
 }
 
-// Optional local regression configuration is ignored by git and never bundled.
-// Both paths use the same image/checkpoint/prompt. Only attention differs.
+/// Optional local evaluation, configured by the git-ignored
+/// `work/Evaluation/config.json`. Every sample runs under each attention mode,
+/// so accuracy and speed of the fused kernel are compared on identical input:
+///
+///     {"modelPath": "...", "outputPath": "...", "tierCeiling": "extended",
+///      "attention": ["mlx", "fusedExperimental"],
+///      "samples": [{"image": "page1.jpg", "reference": "page1.md"}]}
+///
+/// Sample paths are relative to the config file. `reference` is optional.
 extension ReconstructionTests {
-    func testLocalHandwritingAgainstReferenceAttention() async throws {
+    private struct EvaluationConfig: Decodable {
+        struct Sample: Decodable { let image: String; let reference: String? }
+        let modelPath: String
+        let outputPath: String
+        let tierCeiling: String?
+        let attention: [String]?
+        let maxOutputTokens: Int?
+        let samples: [Sample]
+    }
+
+    private struct SampleReport: Encodable {
+        let image: String
+        let attention: String
+        let completed: Bool
+        let failure: String?
+        let characterErrorRate: Double?
+        let metrics: FirebirdGenerationMetrics?
+    }
+
+    func testLocalEvaluation() async throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("Metal GPU required") }
-        struct Config: Decodable { let modelPath: String; let imagePath: String; let outputPath: String }
         let repository = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
-        let configURL = repository.appendingPathComponent("work/Regression/config.json")
+        let configURL = repository.appendingPathComponent("work/Evaluation/config.json")
         guard FileManager.default.fileExists(atPath: configURL.path) else {
-            throw XCTSkip("Optional local handwriting regression not configured")
+            throw XCTSkip("Optional local evaluation not configured")
         }
-        let config = try JSONDecoder().decode(Config.self, from: Data(contentsOf: configURL))
+        let config = try JSONDecoder().decode(EvaluationConfig.self, from: Data(contentsOf: configURL))
+        let base = configURL.deletingLastPathComponent()
         let destination = URL(fileURLWithPath: config.outputPath)
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
-        let image = try Data(contentsOf: URL(fileURLWithPath: config.imagePath))
-        for reference in [true, false] {
-            let name = reference ? "reference" : "fused"
-            MLXRandom.seed(42)
-            let started = Date()
-            var completed = false
-            var output = ""
-            do {
-                output = try await FirebirdAttentionDiagnostics.$useReference.withValue(reference) {
-                    try await FirebirdAttentionDiagnostics.$capturePartial.withValue({ partial in
-                        try? partial.write(to: destination.appendingPathComponent(name + "-live.md"),
-                            atomically: true, encoding: .utf8)
-                    }) {
-                        let runtime = FirebirdRuntime()
-                        try await runtime.load(directory: URL(fileURLWithPath: config.modelPath))
-                        return try await FirebirdAttentionDiagnostics.$outputLimit.withValue(768) {
-                            try await runtime.reconstruct(imageData: image)
-                        }
-                    }
-                }
-                completed = true
-            } catch FirebirdRuntimeError.outputLimit(let partial) {
-                output = partial
-            }
-            try output.write(to: destination.appendingPathComponent(name + ".md"), atomically: true, encoding: .utf8)
-            let status = "completed=\(completed) characters=\(output.count) seconds=\(Date().timeIntervalSince(started)) mlxPeakMiB=\(Memory.peakMemory / 1_048_576)"
-            try status.write(to: destination.appendingPathComponent(name + "-status.txt"), atomically: true, encoding: .utf8)
-            XCTAssertTrue(completed, "\(name) did not reach a stop token")
-            XCTAssertLessThan(output.count, 3000, "A few formulas should not produce thousands of extra characters")
-            XCTAssertTrue(output.contains("="), "No equation was produced")
+        let modes = try (config.attention ?? ["mlx"]).map {
+            try XCTUnwrap(FirebirdDecodeAttention(rawValue: $0), "Unknown attention mode \($0)")
         }
+        let ceiling = try config.tierCeiling.map {
+            try XCTUnwrap(FirebirdDeviceBudget.Tier(rawValue: $0), "Unknown tier \($0)")
+        } ?? FirebirdDeviceBudget.defaultCeiling
+
+        var reports: [SampleReport] = []
+        for mode in modes {
+            let runtime = FirebirdRuntime()
+            try await runtime.load(directory: URL(fileURLWithPath: config.modelPath),
+                options: FirebirdRuntimeOptions(decodeAttention: mode, tierCeiling: ceiling,
+                                                maxOutputTokens: config.maxOutputTokens))
+            for sample in config.samples {
+                let imageURL = base.appendingPathComponent(sample.image)
+                let stem = imageURL.deletingPathExtension().lastPathComponent + "-" + mode.rawValue
+                let reference = try sample.reference.map {
+                    try String(contentsOf: base.appendingPathComponent($0), encoding: .utf8)
+                }
+                var output = ""
+                var report: SampleReport
+                do {
+                    let result = try await runtime.reconstruct(imageData: Data(contentsOf: imageURL))
+                    output = result.markdown
+                    report = SampleReport(image: sample.image, attention: mode.rawValue, completed: true, failure: nil,
+                        characterErrorRate: reference.map { TranscriptionMetrics.characterErrorRate(prediction: output, reference: $0) },
+                        metrics: result.metrics)
+                } catch FirebirdRuntimeError.incomplete(let reason, let partial) {
+                    output = partial
+                    report = SampleReport(image: sample.image, attention: mode.rawValue, completed: false,
+                        failure: reason.rawValue, characterErrorRate: nil, metrics: nil)
+                }
+                try output.write(to: destination.appendingPathComponent(stem + ".md"), atomically: true, encoding: .utf8)
+                reports.append(report)
+            }
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(reports).write(to: destination.appendingPathComponent("report.json"))
+        XCTAssertTrue(reports.allSatisfy(\.completed), "Some samples did not reach a stop token; see report.json")
     }
 }

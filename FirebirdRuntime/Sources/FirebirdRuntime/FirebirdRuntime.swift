@@ -132,7 +132,32 @@ public actor FirebirdRuntime {
         UserInput(chat: [.user(prompt, images: [.ciImage(image)])])
     }
 
+    /// The part of an interrupted transcription that is safe to resume from:
+    /// everything through its last line break.
+    static func resumablePrefix(_ partial: String) -> String {
+        guard let newline = partial.lastIndex(of: "\n") else { return "" }
+        return String(partial[...newline])
+    }
+
+    /// Appends already generated tokens after the assistant-turn header. The
+    /// chat template ends with `<|im_start|>assistant\n`, so they continue it.
+    static func appending(_ tokens: [Int], to input: LMInput) -> LMInput {
+        guard !tokens.isEmpty else { return input }
+        let prefix = MLXArray(tokens.map(Int32.init)).expandedDimensions(axis: 0).asType(input.text.tokens.dtype)
+        let text = concatenated([input.text.tokens, prefix], axis: 1)
+        return LMInput(text: .init(tokens: text, mask: ones(like: text).asType(.int8)),
+                       image: input.image, video: input.video)
+    }
+
+    /// Transcribes one page. With `partial`, the output of an interrupted run
+    /// (for example the text of the last `.generating` update), generation
+    /// continues after it instead of starting over: the image, prompt and the
+    /// partial text as the start of the assistant turn are prefilled, and the
+    /// returned Markdown includes that text. Only whole lines are reused,
+    /// because a cut inside a word or LaTeX command tokenizes differently from
+    /// how the model produced it.
     public func reconstruct(imageData: Data, recipe: FirebirdRecipe = .academicTranscription,
+                            resumingFrom partial: String? = nil,
                             progress: (@Sendable (FirebirdProgress) async -> Void)? = nil) async throws -> FirebirdReconstruction {
         guard !isGenerating else { throw FirebirdRuntimeError.busy }
         guard let container, let budget else { throw FirebirdRuntimeError.notLoaded }
@@ -140,6 +165,10 @@ public actor FirebirdRuntime {
         isGenerating = true
         defer { isGenerating = false }
         try Task.checkCancellation()
+        let prefix = partial.map(Self.resumablePrefix) ?? ""
+        let prefixTokens = prefix.isEmpty ? [] : await container.perform { _, tokenizer in
+            tokenizer.encode(text: prefix, addSpecialTokens: false)
+        }
 
         // Refuse a page cleanly rather than risk a memory termination mid-generation.
         Memory.clearCache()
@@ -156,8 +185,9 @@ public actor FirebirdRuntime {
             // Preparation consumes its input and generation consumes the result,
             // so each attempt builds both from the Sendable image bytes.
             guard let image = CIImage(data: imageData) else { throw FirebirdRuntimeError.invalidImage }
-            let input = try await container.prepare(input: Self.makeInput(image: image, prompt: recipe.prompt))
-            guard input.image != nil else { throw FirebirdRuntimeError.invalidImage }
+            let prepared = try await container.prepare(input: Self.makeInput(image: image, prompt: recipe.prompt))
+            guard prepared.image != nil else { throw FirebirdRuntimeError.invalidImage }
+            let input = Self.appending(prefixTokens, to: prepared)
             let promptTokens = input.text.tokens.size
             let maxTokens = min(budget.maxContext - promptTokens - 1, options.maxOutputTokens ?? Int.max)
             guard maxTokens >= 128 else { throw FirebirdRuntimeError.contextLimit }
@@ -166,14 +196,15 @@ public actor FirebirdRuntime {
                 let sampler = GenerateParameters(temperature: decoding.temperature,
                     topP: decoding.topP, topK: decoding.topK).sampler()
                 let iterator = try TokenIterator(input: input, model: context.model,
-                    processor: FirebirdLogitProcessor(decoding), sampler: sampler,
-                    prefillStepSize: 128, maxTokens: maxTokens)
+                    processor: FirebirdLogitProcessor(decoding, generatedPrefixLength: prefixTokens.count),
+                    sampler: sampler, prefillStepSize: 128, maxTokens: maxTokens)
                 let (stream, task) = generateTask(promptTokenCount: input.text.tokens.size,
                     modelConfiguration: context.configuration, tokenizer: context.tokenizer,
                     iterator: iterator)
                 return FirebirdGeneration(stream: stream, task: task)
             }
-            let outcome = try await consume(generation, attempt: attempt, started: started, progress: progress)
+            let outcome = try await consume(generation, prefix: prefix, attempt: attempt, started: started,
+                                            progress: progress)
             switch outcome {
             case .completed(let text, let info, let firstText):
                 await progress?(.finishing)
@@ -204,11 +235,13 @@ public actor FirebirdRuntime {
         case repetitionLoop(String)
     }
 
-    private func consume(_ generation: FirebirdGeneration, attempt: Int, started: Date,
+    /// Collects the generated text after `prefix`, the resumed part of the page,
+    /// so loop detection and progress see the page as one transcription.
+    private func consume(_ generation: FirebirdGeneration, prefix: String, attempt: Int, started: Date,
                          progress: (@Sendable (FirebirdProgress) async -> Void)?) async throws -> Outcome {
         let task = generation.task
         return try await withTaskCancellationHandler {
-            var text = ""
+            var text = prefix
             var info: GenerateCompletionInfo?
             var firstText: Date?
             var lastReport = Date.distantPast
@@ -314,17 +347,28 @@ enum FirebirdMemory {
 }
 
 /// Combines the decoding attempt's generated-only penalty and no-repeat rule.
+/// When resuming, the last `generatedPrefixLength` prompt tokens are output of
+/// the interrupted run; both rules see them as generated, so a resumed page is
+/// decoded as if it had never stopped.
 struct FirebirdLogitProcessor: LogitProcessor {
     private var penalty: GeneratedTokenPenalty?
     private var noRepeat: NoRepeatNGramBans?
+    private let generatedPrefixLength: Int
 
-    init?(_ decoding: FirebirdDecoding) {
+    init?(_ decoding: FirebirdDecoding, generatedPrefixLength: Int = 0) {
         guard decoding.penalty != nil || decoding.noRepeatNGram != nil else { return nil }
         penalty = decoding.penalty.map(GeneratedTokenPenalty.init)
         noRepeat = decoding.noRepeatNGram.map(NoRepeatNGramBans.init)
+        self.generatedPrefixLength = generatedPrefixLength
     }
 
-    mutating func prompt(_ prompt: MLXArray) {}
+    mutating func prompt(_ prompt: MLXArray) {
+        let count = generatedPrefixLength
+        guard count > 0 else { return }
+        let generated = prompt.reshaped(-1)[(prompt.size - count)...]
+        penalty?.seed(generated)
+        noRepeat?.seed(generated, count: count)
+    }
 
     func process(logits: MLXArray) -> MLXArray {
         let logits = penalty?.process(logits: logits) ?? logits
@@ -348,6 +392,12 @@ struct NoRepeatNGramBans {
     private(set) var count = 0
 
     init(_ rule: NoRepeatNGram) { self.rule = rule }
+
+    /// Starts from `count` tokens that were generated before a resume.
+    mutating func seed(_ tokens: MLXArray, count: Int) {
+        self.count = min(count, rule.window)
+        history = tokens[(tokens.size - self.count)...].asType(.int32)
+    }
 
     mutating func append(_ token: MLXArray) {
         let token = token.reshaped(1).asType(.int32)
@@ -391,6 +441,8 @@ struct GeneratedTokenPenalty: LogitProcessor {
     }
 
     mutating func prompt(_ prompt: MLXArray) {}
+    /// Loads tokens generated before a resume into the window.
+    mutating func seed(_ generated: MLXArray) { base.prompt(generated) }
     func process(logits: MLXArray) -> MLXArray { base.process(logits: logits) }
     mutating func didSample(token: MLXArray) { base.didSample(token: token) }
 }

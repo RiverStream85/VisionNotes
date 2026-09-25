@@ -105,18 +105,22 @@ final class ReconstructionTests: XCTestCase {
 /// `work/Evaluation/config.json`. Each variant runs every sample, so prompt,
 /// decoding, resolution tier and attention kernel are compared on identical input:
 ///
-///     {"modelPath": "...", "outputPath": "...",
+///     {"modelPath": "...", "outputPath": "...", "recipe": "academic",
 ///      "variants": [{"name": "baseline", "attention": "mlx", "prompt": "recipe",
 ///                    "decoding": "recipe", "tierCeiling": "extended"}],
-///      "samples": [{"image": "page1.jpg", "reference": "page1.md"}]}
+///      "samples": [{"image": "page1.jpg", "reference": "page1.md", "lines": "page1.lines.json"}]}
 ///
-/// `prompt` is "recipe" or literal prompt text; `decoding` is "recipe" or
-/// "greedy". Sample paths are relative to the config file; `reference` is optional.
+/// `recipe` (top level or per variant) is "academic", "paddle-spotting" or
+/// "paddle-text" and must suit the checkpoint; `prompt` is "recipe" or literal
+/// prompt text; `decoding` is "recipe" or "greedy". Sample paths are relative
+/// to the config file; `reference` and `lines` (reference line boxes, as
+/// written by Evaluation/vision-lines.swift) are optional.
 extension ReconstructionTests {
     private struct EvaluationConfig: Decodable {
-        struct Sample: Decodable { let image: String; let reference: String? }
+        struct Sample: Decodable { let image: String; let reference: String?; let lines: String? }
         struct Variant: Decodable {
             let name: String
+            let recipe: String?
             let attention: String?
             let prompt: String?
             let decoding: String?
@@ -124,6 +128,7 @@ extension ReconstructionTests {
         }
         let modelPath: String
         let outputPath: String
+        let recipe: String?
         let maxOutputTokens: Int?
         let variants: [Variant]
         let samples: [Sample]
@@ -135,11 +140,21 @@ extension ReconstructionTests {
         let completed: Bool
         let failure: String?
         let characterErrorRate: Double?
+        let boxes: BoxMetrics?
         let metrics: FirebirdGenerationMetrics?
     }
 
-    private func recipe(for variant: EvaluationConfig.Variant) throws -> FirebirdRecipe {
-        let base = FirebirdRecipe.academicTranscription
+    private static func namedRecipe(_ name: String?) throws -> FirebirdRecipe {
+        switch name ?? "academic" {
+        case "academic": .academicTranscription
+        case "paddle-spotting": .paddleSpotting
+        case "paddle-text": .paddleText
+        case let other: throw XCTSkip("Unknown recipe \(other)")
+        }
+    }
+
+    private func recipe(for variant: EvaluationConfig.Variant, default name: String?) throws -> FirebirdRecipe {
+        let base = try Self.namedRecipe(variant.recipe ?? name)
         let prompt = variant.prompt.map { $0 == "recipe" ? base.prompt : $0 } ?? base.prompt
         let attempts: [FirebirdDecoding]
         switch variant.decoding ?? "recipe" {
@@ -147,7 +162,8 @@ extension ReconstructionTests {
         case "greedy": attempts = [.greedy]
         case let other: throw XCTSkip("Unknown decoding \(other)")
         }
-        return FirebirdRecipe(version: base.version + "-" + variant.name, prompt: prompt, attempts: attempts)
+        return FirebirdRecipe(version: base.version + "-" + variant.name, prompt: prompt, attempts: attempts,
+                              output: base.output)
     }
 
     private func evaluationConfig() throws -> (EvaluationConfig, base: URL) {
@@ -168,20 +184,33 @@ extension ReconstructionTests {
     /// evaluation config's model and samples.
     func testResumeMatchesUninterruptedGeneration() async throws {
         let (config, base) = try evaluationConfig()
+        let recipe = try Self.namedRecipe(config.recipe)
         let runtime = FirebirdRuntime()
         try await runtime.load(directory: URL(fileURLWithPath: config.modelPath))
         for sample in config.samples {
             let image = try Data(contentsOf: base.appendingPathComponent(sample.image))
-            let full = try await runtime.reconstruct(imageData: image).markdown
+            let full = try await runtime.reconstruct(imageData: image, recipe: recipe).output
             let half = String(full.prefix(full.count / 2))
             let partial = FirebirdRuntime.resumablePrefix(half)
             XCTAssertFalse(partial.isEmpty, "\(sample.image): no line break in the first half")
-            let resumed = try await runtime.reconstruct(imageData: image, resumingFrom: half)
-            XCTAssertTrue(resumed.markdown.hasPrefix(partial.trimmingCharacters(in: .whitespacesAndNewlines)))
-            let rate = TranscriptionMetrics.characterErrorRate(prediction: resumed.markdown, reference: full)
+            let resumed = try await runtime.reconstruct(imageData: image, recipe: recipe, resumingFrom: half)
+            XCTAssertTrue(resumed.output.hasPrefix(partial.trimmingCharacters(in: .whitespacesAndNewlines)))
+            let rate = TranscriptionMetrics.characterErrorRate(prediction: resumed.output, reference: full)
             print("resume \(sample.image): resumed after \(partial.count) of \(full.count) characters, "
                 + "\(resumed.metrics.promptTokens) prompt tokens, CER vs uninterrupted \(rate)")
-            XCTAssertEqual(resumed.markdown, full, "\(sample.image): resumed output differs")
+            guard recipe.output == .spotting else {
+                XCTAssertEqual(resumed.output, full, "\(sample.image): resumed output differs")
+                continue
+            }
+            // Coordinate tokens are near ties: batched prefill and one-token decode
+            // round differently in bf16, which moves a few corners by 1-3 of 1000.
+            let (lines, expected) = (FirebirdSpotting(parsing: resumed.output).lines, FirebirdSpotting(parsing: full).lines)
+            XCTAssertEqual(lines.map(\.text), expected.map(\.text), "\(sample.image): resumed text differs")
+            for (line, reference) in zip(lines, expected) {
+                let (a, b) = (line.boundingBox, reference.boundingBox)
+                let drift = max(abs(a.minX - b.minX), abs(a.minY - b.minY), abs(a.maxX - b.maxX), abs(a.maxY - b.maxY))
+                XCTAssertLessThanOrEqual(drift, 0.005, "\(sample.image): box of \"\(line.text)\" moved")
+            }
         }
     }
 
@@ -197,7 +226,7 @@ extension ReconstructionTests {
                                           "Unknown attention \(variant.attention ?? "")")
             let tier = try XCTUnwrap(FirebirdDeviceBudget.Tier(rawValue: variant.tierCeiling ?? "extended"),
                                      "Unknown tier \(variant.tierCeiling ?? "")")
-            let recipe = try recipe(for: variant)
+            let recipe = try recipe(for: variant, default: config.recipe)
             // Reload only when the attention kernel or resolution tier changes.
             if loaded?.attention != attention || loaded?.tier != tier {
                 loaded = nil
@@ -214,21 +243,29 @@ extension ReconstructionTests {
                 let reference = try sample.reference.map {
                     try String(contentsOf: base.appendingPathComponent($0), encoding: .utf8)
                 }
+                let referenceLines = try sample.lines.map {
+                    try JSONDecoder().decode([ReferenceLine].self, from: Data(contentsOf: base.appendingPathComponent($0)))
+                }
                 var output = ""
                 var report: SampleReport
                 do {
                     let result = try await runtime.reconstruct(imageData: Data(contentsOf: imageURL), recipe: recipe)
                     output = result.markdown
+                    if recipe.output == .spotting {
+                        try result.output.write(to: destination.appendingPathComponent(stem + ".txt"),
+                                                atomically: true, encoding: .utf8)
+                    }
                     report = SampleReport(image: sample.image, variant: variant.name, completed: true, failure: nil,
                         characterErrorRate: reference.map { TranscriptionMetrics.characterErrorRate(prediction: output, reference: $0) },
+                        boxes: referenceLines.flatMap { BoxMetrics(boxes: result.lines.map(\.boundingBox), reference: $0) },
                         metrics: result.metrics)
                 } catch FirebirdRuntimeError.incomplete(let reason, let partial) {
                     output = partial
                     report = SampleReport(image: sample.image, variant: variant.name, completed: false,
-                        failure: reason.rawValue, characterErrorRate: nil, metrics: nil)
+                        failure: reason.rawValue, characterErrorRate: nil, boxes: nil, metrics: nil)
                 } catch {
                     report = SampleReport(image: sample.image, variant: variant.name, completed: false,
-                        failure: "\(error)", characterErrorRate: nil, metrics: nil)
+                        failure: "\(error)", characterErrorRate: nil, boxes: nil, metrics: nil)
                 }
                 try output.write(to: destination.appendingPathComponent(stem + ".md"), atomically: true, encoding: .utf8)
                 reports.append(report)
@@ -238,5 +275,43 @@ extension ReconstructionTests {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(reports).write(to: destination.appendingPathComponent("report.json"))
         XCTAssertTrue(reports.allSatisfy(\.completed), "Some samples did not reach a stop token; see report.json")
+    }
+}
+
+/// A reference line from a fixture's `.lines.json`: normalized, origin top left.
+private struct ReferenceLine: Decodable {
+    let text: String
+    let box: [Double]
+    var rect: CGRect { CGRect(x: box[0], y: box[1], width: box[2] - box[0], height: box[3] - box[1]) }
+}
+
+/// The rough box checks of Evaluation/bench_vlm.py, so Swift and Python runs
+/// compare: line recall (reference line centers inside a predicted box), box
+/// precision (predicted boxes containing a line center) and mean IoU of each
+/// such box against the union of the lines whose centers it contains.
+private struct BoxMetrics: Encodable {
+    let lineRecall: Double
+    let boxPrecision: Double
+    let meanIoU: Double
+    let boxes: Int
+
+    /// `boxes` are in Vision's convention (origin bottom left).
+    init?(boxes: [CGRect], reference: [ReferenceLine]) {
+        guard !boxes.isEmpty, !reference.isEmpty else { return nil }
+        let boxes = boxes.map { CGRect(x: $0.minX, y: 1 - $0.maxY, width: $0.width, height: $0.height) }
+        let centers = reference.map { CGPoint(x: $0.rect.midX, y: $0.rect.midY) }
+        func contains(_ box: CGRect, _ point: CGPoint) -> Bool { box.insetBy(dx: -0.01, dy: -0.01).contains(point) }
+        func area(_ rect: CGRect) -> Double { rect.isNull ? 0 : rect.width * rect.height }
+        lineRecall = Double(centers.filter { center in boxes.contains { contains($0, center) } }.count) / Double(centers.count)
+        let ious = boxes.compactMap { box -> Double? in
+            let covered = zip(reference, centers).filter { contains(box, $1) }.map(\.0.rect)
+            guard let first = covered.first else { return nil }
+            let union = covered.dropFirst().reduce(first) { $0.union($1) }
+            let intersection = area(box.intersection(union))
+            return intersection / (area(box) + area(union) - intersection)
+        }
+        boxPrecision = Double(ious.count) / Double(boxes.count)
+        meanIoU = ious.isEmpty ? 0 : ious.reduce(0, +) / Double(ious.count)
+        self.boxes = boxes.count
     }
 }

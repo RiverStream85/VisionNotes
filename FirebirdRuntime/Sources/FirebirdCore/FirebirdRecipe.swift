@@ -66,14 +66,19 @@ public struct FirebirdDecoding: Codable, Equatable, Sendable {
 /// Everything besides the weights that determines a page transcription.
 /// Changing any field must change `version`, which invalidates checkpoints.
 public struct FirebirdRecipe: Codable, Equatable, Sendable {
+    /// What the model writes: a Markdown page, or text elements with locations
+    /// (`FirebirdSpotting`).
+    public enum Output: String, Codable, Sendable { case markdown, spotting }
+
     public let version: String
     public let prompt: String
     /// Tried in order. A later attempt runs only after a repetition loop.
     public let attempts: [FirebirdDecoding]
+    public let output: Output
 
-    public init(version: String, prompt: String, attempts: [FirebirdDecoding]) {
+    public init(version: String, prompt: String, attempts: [FirebirdDecoding], output: Output = .markdown) {
         precondition(!attempts.isEmpty)
-        self.version = version; self.prompt = prompt; self.attempts = attempts
+        self.version = version; self.prompt = prompt; self.attempts = attempts; self.output = output
     }
 
     /// `qwenvl markdown` is Qwen3-VL's trained document-parsing prompt. On the
@@ -90,6 +95,23 @@ public struct FirebirdRecipe: Codable, Equatable, Sendable {
             FirebirdDecoding(penalty: FirebirdPenalty(kind: .repetition, value: 1.1, window: 64),
                              noRepeatNGram: .reference)
         ])
+}
+
+extension FirebirdRecipe {
+    /// PaddleOCR-VL-1.5's trained spotting task: every text line with its
+    /// quadrilateral. Without the no-repeat rule it looped on the screenshot
+    /// fixture's checkbox list until the 4,096-token limit (mlx-vlm, M4); with
+    /// it, character error rate was 0.081 there and 0.033 on handwriting. There
+    /// is no penalty fallback: a repetition penalty also pushes location tokens
+    /// away from values already used, and 1.05 did not stop the loop.
+    public static let paddleSpotting = FirebirdRecipe(
+        version: "paddle-spotting-1", prompt: "Spotting:",
+        attempts: [FirebirdDecoding(noRepeatNGram: .reference)], output: .spotting)
+
+    /// PaddleOCR-VL-1.5's plain text task, without locations.
+    public static let paddleText = FirebirdRecipe(
+        version: "paddle-text-1", prompt: "OCR:",
+        attempts: [FirebirdDecoding(noRepeatNGram: .reference)])
 }
 
 /// Identity of a pinned model plus the recipe applied to it. Page checkpoints

@@ -8,10 +8,18 @@ import json
 from pathlib import Path
 import urllib.request
 
+# Pinned checkpoints: lock file and default development cache.
+MODELS = {
+    'qwen3-vl': ('FirebirdModel.lock.json', 'work/FirebirdModel'),
+    'paddleocr-vl': ('PaddleOCRVLModel.lock.json', 'work/PaddleOCRVLModel'),
+}
 parser = argparse.ArgumentParser()
-parser.add_argument('--output', type=Path, default=Path('work/FirebirdModel'))
+parser.add_argument('--model', choices=MODELS, default='qwen3-vl')
+parser.add_argument('--output', type=Path)
 args = parser.parse_args()
-lock = json.loads((Path(__file__).resolve().parents[1] / 'VisionNotes/Resources/FirebirdModel.lock.json').read_text())
+lock_name, default_output = MODELS[args.model]
+args.output = args.output or Path(default_output)
+lock = json.loads((Path(__file__).resolve().parents[1] / 'VisionNotes/Resources' / lock_name).read_text())
 args.output.mkdir(parents=True, exist_ok=True)
 
 def verify(path, asset):

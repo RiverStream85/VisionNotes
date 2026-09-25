@@ -32,6 +32,24 @@ final class ReconstructionTests: XCTestCase {
         XCTAssertEqual(output[0, 3].item(Float.self), -1.5)
     }
 
+    func testGPUNoRepeatBansMatchReferenceRule() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("Metal GPU required") }
+        let rule = NoRepeatNGram(size: 4, window: 12)
+        var generator = SystemRandomNumberGenerator()
+        for trial in 0..<200 {
+            // A small alphabet makes repeated n-grams common.
+            let length = Int.random(in: 0...30, using: &generator)
+            let tokens = (0..<length).map { _ in Int.random(in: 0..<5, using: &generator) }
+            var bans = NoRepeatNGramBans(rule)
+            for token in tokens { bans.append(MLXArray([Int32(token)])) }
+            let output = bans.apply(to: MLXArray.zeros([1, 8]))
+            eval(output)
+            let banned = Set((0..<8).filter { output[0, $0].item(Float.self) == -Float.infinity })
+            let expected = Set(rule.bannedTokens(after: Array(tokens.suffix(rule.window))))
+            XCTAssertEqual(banned, expected, "trial \(trial), history \(tokens)")
+        }
+    }
+
     func testProcessorConfigurationCapsPixels() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

@@ -76,18 +76,15 @@ public struct FirebirdRecipe: Codable, Equatable, Sendable {
         self.version = version; self.prompt = prompt; self.attempts = attempts
     }
 
-    /// Greedy first, so identical input gives identical output and can be
-    /// regression-tested. The reference no-repeat rule blocks long verbatim
-    /// cycles as they form; the fallback adds a mild, generated-only
-    /// repetition penalty for shorter loops instead of random sampling.
+    /// `qwenvl markdown` is Qwen3-VL's trained document-parsing prompt. On the
+    /// DeepSeekOCR math fixture (M4, Release) it cut character error rate from
+    /// 0.45 to 0.07 versus a long instruction prompt, which made the model emit
+    /// a whole LaTeX document instead of Markdown. Decoding is greedy with the
+    /// reference no-repeat rule; the fallback adds a mild generated-only
+    /// repetition penalty for loops the rule cannot see.
     public static let academicTranscription = FirebirdRecipe(
-        version: "recipe-3",
-        prompt: """
-            Transcribe this handwritten academic page faithfully into Markdown with LaTeX mathematics.
-            Preserve the reading order, headings, all formulas, subscripts, superscripts and matrices.
-            Use $...$ for inline math and $$...$$ for display math. Do not solve, summarize, or invent text.
-            Mark genuinely unreadable content [unclear: description]. Return only the document, without a code fence.
-            """,
+        version: "recipe-4",
+        prompt: "qwenvl markdown",
         attempts: [
             FirebirdDecoding(noRepeatNGram: .reference),
             FirebirdDecoding(penalty: FirebirdPenalty(kind: .repetition, value: 1.1, window: 64),

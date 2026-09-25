@@ -61,7 +61,7 @@ final class FirebirdDeviceBudgetTests: XCTestCase {
     }
 
     func testDefaultCeilingIsMeasuredTier() {
-        XCTAssertEqual(FirebirdDeviceBudget.select(footprint: footprint, available: 10 * gib)?.tier, .extended)
+        XCTAssertEqual(FirebirdDeviceBudget.select(footprint: footprint, available: 10 * gib)?.tier, .high)
     }
 
     func testCeilingCapsTier() {
@@ -94,9 +94,9 @@ final class FirebirdRecipeTests: XCTestCase {
 
     func testIdentityDerivesCheckpointPath() {
         let identity = FirebirdModelIdentity(repository: "mlx-community/Qwen3-VL-2B-Instruct-4bit",
-            revision: "9c4f5209e57b31f4b9dfba735de3fb983739c9cc", recipeVersion: "recipe-3")
-        XCTAssertEqual(identity.identifier, "mlx-community/Qwen3-VL-2B-Instruct-4bit@9c4f5209e57b31f4b9dfba735de3fb983739c9cc/recipe-3")
-        XCTAssertEqual(identity.checkpointPath(pageIndex: 0), "firebird-qwen3-vl-2b-instruct-4bit-9c4f5209-recipe-3-page-001.json")
+            revision: "9c4f5209e57b31f4b9dfba735de3fb983739c9cc", recipeVersion: "recipe-4")
+        XCTAssertEqual(identity.identifier, "mlx-community/Qwen3-VL-2B-Instruct-4bit@9c4f5209e57b31f4b9dfba735de3fb983739c9cc/recipe-4")
+        XCTAssertEqual(identity.checkpointPath(pageIndex: 0), "firebird-qwen3-vl-2b-instruct-4bit-9c4f5209-recipe-4-page-001.json")
     }
 }
 

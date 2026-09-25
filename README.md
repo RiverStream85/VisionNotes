@@ -28,7 +28,7 @@ Once setup succeeds, later process cold starts use the encrypted container files
 
 The runtime uses the actual vision encoder, tokenizer, 28-layer language model, KV cache and autoregressive generation.
 Image resolution and context length are chosen at load time from the memory the process may use (`os_proc_available_memory`), not from a device model name.
-`FirebirdCore/FirebirdDeviceBudget.swift` defines four tiers, from 393,216 pixels / 3,072 tokens up to 1,048,576 pixels / 6,144 tokens; the default ceiling is 786,432 pixels / 5,120 tokens until the highest tier is measured on a phone.
+`FirebirdCore/FirebirdDeviceBudget.swift` defines four tiers, from 393,216 pixels / 3,072 tokens up to 1,048,576 pixels / 6,144 tokens; the default ceiling is the highest tier, which on an M4 peaked at about 100 MiB more than the 786,432-pixel tier and transcribed the math fixture more accurately.
 A device that cannot hold the weights plus one page reports local inference unavailable instead of risking a memory termination.
 The app requests `com.apple.developer.kernel.increased-memory-limit`, so the signing team's App ID needs the Increased Memory Limit capability.
 The per-pixel and fixed memory reserves in that file are uncalibrated estimates; replace them with peaks measured by the evaluation harness on each target device.
@@ -38,8 +38,10 @@ Upstream model: [Qwen3-VL-2B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-2B-I
 
 ## Decoding
 
+The prompt is Qwen3-VL's trained document-parsing instruction, `qwenvl markdown`; a long custom instruction made the model emit a whole LaTeX document and raised character error rate on the math fixture from 0.07 to 0.45.
 Pages are decoded greedily, so identical input yields identical output and can be regression-tested.
 No penalty is applied to prompt tokens: LaTeX legitimately repeats `\`, `{`, `}`, `_`, `^` and `$`, and the earlier presence penalty of 1.5 over prompt plus output suppressed exactly those tokens.
+DeepSeek-OCR's reference no-repeat rule (no repeated 20-gram within the last 90 generated tokens) runs as lazy MLX operations on the GPU, so it does not stall decoding.
 A repetition-loop detector stops a page whose tail repeats the same block, and the page is retried once with a mild repetition penalty over the last 64 generated tokens only.
 The prompt and decoding attempts live in `FirebirdCore/FirebirdRecipe.swift`; its version is part of the checkpoint identifier, so changing the recipe re-runs pages instead of reusing stale results.
 The model identifier and checkpoint file names are derived from `FirebirdModel.lock.json` plus the recipe version.

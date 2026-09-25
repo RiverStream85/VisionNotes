@@ -95,7 +95,6 @@ enum StoredZIPWriter {
             let values = try url.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey])
             guard values.isRegularFile == true, !excludingNames.contains(url.lastPathComponent) else { continue }
             let path = try StorageRelativePath.path(of: url, under: directory)
-            guard !path.lowercased().contains("providerkeys"), !path.contains("..") else { continue }
             result.append(
                 Entry(
                     path: path,

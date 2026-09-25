@@ -34,15 +34,6 @@ struct MathNotePipeline: Sendable {
         var operation = "Preparing source"
         do {
             var manifest = try await transition(jobID, to: .preparing, progress: progress)
-            let pageURLs = try await sourcePageURLs(manifest)
-
-            if !(await store.exists(relativePath: "input.pdf", jobID: jobID)) {
-                let inputPDF = try await Task.detached(priority: .userInitiated) {
-                    try FacsimilePDFBuilder.makePDF(pageURLs: pageURLs)
-                }.value
-                try await store.write(inputPDF, relativePath: "input.pdf", jobID: jobID)
-            }
-
             manifest = try await transition(jobID, to: .baseOCR, progress: progress)
             manifest = try await transition(jobID, to: .refining, progress: progress)
             let refinements: [MathNotePageRefinement]
@@ -52,22 +43,11 @@ struct MathNotePipeline: Sendable {
             } catch is CancellationError {
                 throw CancellationError()
             } catch let error as MathNoteError where error == .localInferenceUnavailable {
-                // Only a model-availability/execution failure is eligible for
-                // the optional network path. Storage, authentication, parsing,
-                // and integrity failures must never cause an upload.
-                guard cloudFallbackAuthorized, manifest.allowsCloudFallback else { throw error }
-                // Consent authorizes one cloud attempt. Consume the persisted
-                // flag before constructing any request so a crash, provider
-                // error, or later Retry can never upload again silently.
-                _ = try await store.consumeCloudFallbackConsent(jobID)
+                // Only a local model failure may use the network, and only when
+                // the user confirmed the upload for this run.
+                guard cloudFallbackAuthorized else { throw error }
+                operation = "Cloud reconstruction"
                 refinements = try await cloudRefinements(manifest: manifest, progress: progress)
-            }
-
-            // If the local retry recovered without needing the network, clear
-            // the unused authorization as well. No completed job retains a
-            // latent permission for a later upload.
-            if manifest.allowsCloudFallback {
-                manifest = try await store.setCloudFallbackConsent(jobID, allowed: false)
             }
 
             guard refinements.count == manifest.pageCount else {
@@ -111,42 +91,35 @@ struct MathNotePipeline: Sendable {
             await progress?(manifest)
             return manifest
         } catch is CancellationError {
-            _ = try? await store.setCloudFallbackConsent(jobID, allowed: false)
             let manifest = try? await store.update(jobID, stage: .cancelled)
             if let manifest { await progress?(manifest) }
             throw MathNoteError.cancelled
         } catch let error as MathNoteError where error == .cancelled {
-            _ = try? await store.setCloudFallbackConsent(jobID, allowed: false)
             let manifest = try? await store.update(jobID, stage: .cancelled)
             if let manifest { await progress?(manifest) }
             throw error
         } catch let error as MathNoteError where error == .localInferenceUnavailable {
-            _ = try? await store.setCloudFallbackConsent(jobID, allowed: false)
             let current = try? await store.load(jobID)
-            // Keep any completed sealed local page checkpoints and a safe local
-            // error. The one-shot flag has been cleared, so nothing may enter
-            // the network path until a later explicit confirmation.
+            // Completed page checkpoints are kept; the user chooses a local
+            // retry or a confirmed cloud run.
             let manifest = try? await store.update(
                 jobID,
                 stage: .awaitingCloudConsent,
-                failureMessage: error.mathNoteSafeMessage,
+                failureMessage: error.localizedDescription,
                 stageProgress: current?.stageProgress ?? MathNoteStage.awaitingCloudConsent.progress,
                 stageDetail: "Local state saved · nothing uploaded"
             )
             if let manifest { await progress?(manifest) }
             throw error
         } catch {
-            // Record only the stage, error type and numeric code, never userInfo,
-            // localized descriptions, note content, paths, or provider keys.
             let code = (error as NSError).code
             let errorType = String(reflecting: type(of: error))
             Logger(subsystem: "VisionNotes", category: "AcademicPipeline")
                 .error("Failed stage: \(operation, privacy: .public); type: \(errorType, privacy: .public); code: \(code)")
-            _ = try? await store.setCloudFallbackConsent(jobID, allowed: false)
             let manifest = try? await store.update(
                 jobID,
                 stage: .failed,
-                failureMessage: error.mathNoteSafeMessage,
+                failureMessage: error.localizedDescription,
                 stageDetail: "\(operation) · error \(code)"
             )
             if let manifest { await progress?(manifest) }
@@ -157,10 +130,6 @@ struct MathNotePipeline: Sendable {
     /// Rebuilds all local deliverables from edited Markdown without loading a key or calling a provider.
     func rebuild(jobID: UUID, markdown: String, progress: ProgressHandler? = nil) async throws -> MathNoteJobManifest {
         do {
-            var manifest = try await store.load(jobID)
-            if manifest.allowsCloudFallback {
-                manifest = try await store.setCloudFallbackConsent(jobID, allowed: false)
-            }
             let trimmed = markdown.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { throw MathNoteError.message("The source document is empty.") }
 
@@ -175,17 +144,17 @@ struct MathNotePipeline: Sendable {
                 )
             }
             try await store.write(trimmed, relativePath: "edited-source.md", jobID: jobID)
-            manifest = try await transition(jobID, to: .rendering, progress: progress)
+            let manifest = try await transition(jobID, to: .rendering, progress: progress)
             try await renderer.render(markdown: trimmed, manifest: manifest,
                                       jobDirectory: try await store.directory(for: jobID))
-            manifest = try await store.update(
+            let completed = try await store.update(
                 jobID,
                 stage: .complete,
                 failureMessage: nil,
                 uncertainCount: Self.uncertainCount(in: trimmed)
             )
-            await progress?(manifest)
-            return manifest
+            await progress?(completed)
+            return completed
         } catch is CancellationError {
             let manifest = try? await store.update(jobID, stage: .cancelled)
             if let manifest { await progress?(manifest) }
@@ -198,7 +167,7 @@ struct MathNotePipeline: Sendable {
             let manifest = try? await store.update(
                 jobID,
                 stage: .failed,
-                failureMessage: error.mathNoteSafeMessage
+                failureMessage: error.localizedDescription
             )
             if let manifest { await progress?(manifest) }
             throw error
@@ -237,7 +206,7 @@ struct MathNotePipeline: Sendable {
                     pageIndex: pageIndex,
                     pageCount: manifest.pageCount,
                     localFraction: 1,
-                    detail: "Page \(pageIndex + 1) of \(manifest.pageCount) · encrypted Firebird checkpoint",
+                    detail: "Page \(pageIndex + 1) of \(manifest.pageCount) · saved Firebird result",
                     progress: progress
                 )
                 continue
@@ -271,9 +240,9 @@ struct MathNotePipeline: Sendable {
                     jobID: manifest.id, overwrite: true)
                 switch reason {
                 case .outputLimit:
-                    throw MathNoteError.message("Local reconstruction reached its output limit before finishing. An incomplete draft was saved encrypted. Try a smaller section of this page; no data was uploaded.")
+                    throw MathNoteError.message("Local reconstruction reached its output limit before finishing. An incomplete draft was saved. Try a smaller section of this page; no data was uploaded.")
                 case .repetitionLoop:
-                    throw MathNoteError.message("Local reconstruction kept repeating the same text, including after a retry. An incomplete draft was saved encrypted. Try a clearer photo or a smaller section of this page; no data was uploaded.")
+                    throw MathNoteError.message("Local reconstruction kept repeating the same text, including after a retry. An incomplete draft was saved. Try a clearer photo or a smaller section of this page; no data was uploaded.")
                 }
             }
             let page = MathNotePageRefinement(
@@ -299,26 +268,27 @@ struct MathNotePipeline: Sendable {
                 pageIndex: pageIndex,
                 pageCount: manifest.pageCount,
                 localFraction: 1,
-                detail: "Page \(pageIndex + 1) of \(manifest.pageCount) · local reconstruction sealed",
+                detail: "Page \(pageIndex + 1) of \(manifest.pageCount) · local reconstruction saved",
                 progress: progress
             )
         }
         return refinements
     }
 
-    /// Retained cloud path. This helper is reachable only after the manifest
-    /// records explicit user consent and the local Firebird path fails.
+    /// Cloud path, used only after local Firebird fails and the user confirms the upload.
     private func cloudRefinements(
         manifest: MathNoteJobManifest,
         progress: ProgressHandler?
     ) async throws -> [MathNotePageRefinement] {
-        guard manifest.allowsCloudFallback else { throw MathNoteError.cloudFallbackNotAuthorized }
         let keys = try ProviderKeys.load()
         let rawOCR: Data
         if await store.exists(relativePath: "cloud-ocr.json", jobID: manifest.id) {
             rawOCR = try await store.read(relativePath: "cloud-ocr.json", jobID: manifest.id)
         } else {
-            let inputPDF = try await store.read(relativePath: "input.pdf", jobID: manifest.id)
+            let pageURLs = try await sourcePageURLs(manifest)
+            let inputPDF = try await Task.detached(priority: .userInitiated) {
+                try FacsimilePDFBuilder.makePDF(pageURLs: pageURLs)
+            }.value
             rawOCR = try await MistralOCRClient(key: keys.mistral).recognize(
                 documentData: inputPDF,
                 mimeType: "application/pdf"

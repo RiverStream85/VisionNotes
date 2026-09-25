@@ -12,7 +12,6 @@ struct MathNotesView: View {
     @State private var showsPhotos = false
     @State private var showsFiles = false
     @State private var showsScanner = false
-    @State private var confirmsUpload = false
     @State private var confirmsDeleteAll = false
 
     var body: some View {
@@ -26,18 +25,6 @@ struct MathNotesView: View {
 
     private var dialogLayer: some View {
         importLayer
-            .confirmationDialog(
-                "Process \(viewModel.draftPages.count) pages on this iPhone?",
-                isPresented: $confirmsUpload,
-                titleVisibility: .visible
-            ) {
-                Button("Process on this iPhone") {
-                    viewModel.startConversion()
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("Processing starts on this device and uploads nothing. If the local reconstruction package is unavailable or cannot finish, the saved job pauses before offering a separately confirmed cloud fallback.")
-            }
             .alert("Delete all Academic jobs?", isPresented: $confirmsDeleteAll) {
                 Button("Delete all", role: .destructive) { viewModel.deleteAll() }
                 Button("Cancel", role: .cancel) {}
@@ -158,7 +145,7 @@ struct MathNotesView: View {
                 }
                 .onMove(perform: viewModel.moveDraftPages)
                 .onDelete(perform: viewModel.deleteDraftPages)
-                Button { confirmsUpload = true } label: {
+                Button { viewModel.startConversion() } label: {
                     Label(
                         "Create Academic document (\(viewModel.draftPages.count) pages)",
                         systemImage: "function"
@@ -167,7 +154,7 @@ struct MathNotesView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(viewModel.isWorking)
-                .accessibilityHint("Starts a local-only reconstruction attempt")
+                .accessibilityHint("Reconstructs the pages on this iPhone")
             }
         } header: {
             Text("New Academic document")
@@ -247,7 +234,7 @@ struct MathNotesView: View {
     private var privacySection: some View {
         Section {
             Label("Academic jobs begin with on-device reconstruction.", systemImage: "iphone.gen3")
-            Text("Your notes are encrypted on this iPhone. Pages are sent to cloud providers only after you choose cloud fallback and confirm the upload.")
+            Text("Pages stay on this iPhone. They are sent to cloud providers only after you choose cloud fallback and confirm the upload.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         } header: {
@@ -517,7 +504,7 @@ private struct MathNoteJobDetailView: View {
                     Button("Upload and resume") { viewModel.useCloudFallback(job) }
                     Button("Cancel", role: .cancel) {}
                 } message: {
-                    Text("The complete rasterized PDF is sent to Mistral OCR. Each page overview and high-resolution crop is sent in a separate request to Qwen3-VL through SiliconFlow. A final Qwen3-VL request receives those transcripts with Mistral-derived text for merging. This one-shot authorization is consumed before upload; provider privacy, retention, and quota terms apply.")
+                    Text("The complete rasterized PDF is sent to Mistral OCR. Each page overview and high-resolution crop is sent in a separate request to Qwen3-VL through SiliconFlow. A final Qwen3-VL request receives those transcripts with Mistral-derived text for merging. Provider privacy, retention, and quota terms apply.")
                 }
             } else {
                 ProgressView("Opening saved job…")
@@ -651,7 +638,7 @@ private struct MathNoteJobDetailView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(viewModel.isWorking || viewModel.selectedSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            Text("Recompile rebuilds Markdown, LaTeX, HTML, both PDFs and ZIP locally. Previous edits are retained in the encrypted job archive.")
+            Text("Recompile rebuilds Markdown, LaTeX, HTML, both PDFs and ZIP locally. Previous edits are kept in the job folder.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

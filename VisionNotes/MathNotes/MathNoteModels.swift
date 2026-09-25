@@ -88,13 +88,9 @@ struct MathNoteJobManifest: Identifiable, Codable, Equatable, Sendable {
     var rendererDescription: String
     var stageProgress: Double?
     var stageDetail: String?
-    /// `true` only after the user selects the cloud-fallback action for this
-    /// job. Missing on version-1 manifests and therefore treated as false.
-    var cloudFallbackAllowed: Bool?
 
     var pageCount: Int { pages.count }
     var displayedProgress: Double { stageProgress ?? stage.progress }
-    var allowsCloudFallback: Bool { cloudFallbackAllowed == true }
 
     init(id: UUID = UUID(), title: String, pages: [MathNotePageRecord]) {
         self.id = id
@@ -109,7 +105,6 @@ struct MathNoteJobManifest: Identifiable, Codable, Equatable, Sendable {
         rendererDescription = "On-device HTML + MathML rendered by WebKit"
         stageProgress = nil
         stageDetail = nil
-        cloudFallbackAllowed = false
     }
 }
 
@@ -180,7 +175,6 @@ enum MathNoteError: LocalizedError, Equatable, Sendable {
     case providerRejected(status: Int)
     case providerUnavailable
     case localInferenceUnavailable
-    case cloudFallbackNotAuthorized
     case visionRequestsIncomplete(completed: Int, total: Int)
     case refinementPageMismatch(expected: Int, actual: Int)
     case renderTimedOut
@@ -211,8 +205,6 @@ enum MathNoteError: LocalizedError, Equatable, Sendable {
             "The OCR provider could not be reached. Check your connection and try again."
         case .localInferenceUnavailable:
             "On-device reconstruction could not finish this page. Any completed local checkpoints were kept, and no data was uploaded."
-        case .cloudFallbackNotAuthorized:
-            "Cloud OCR was not used because this job has no explicit cloud-fallback consent."
         case .visionRequestsIncomplete(let completed, let total):
             "Vision correction paused after saving \(completed) of \(total) requests. Resume retries only the unfinished requests."
         case .refinementPageMismatch(let expected, let actual):
@@ -246,10 +238,3 @@ enum MathNoteError: LocalizedError, Equatable, Sendable {
     }
 }
 
-extension Error {
-    var mathNoteSafeMessage: String {
-        if self is CancellationError { return MathNoteError.cancelled.localizedDescription }
-        if let error = self as? MathNoteError { return error.localizedDescription }
-        return "The Academic conversion could not finish. Your completed stages are still saved."
-    }
-}

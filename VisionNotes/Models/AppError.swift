@@ -1,8 +1,7 @@
 import Foundation
 
-/// Every user-facing failure in the app funnels through this type so the UI can
-/// show a readable message and a concrete recovery hint instead of a raw
-/// `NSError` description.
+/// User-facing failures with a recovery hint. Cases that wrap another error
+/// carry its `localizedDescription` so the cause stays visible.
 enum AppError: LocalizedError, Equatable {
     case cameraUnavailable
     case cameraPermissionDenied
@@ -36,20 +35,20 @@ enum AppError: LocalizedError, Equatable {
             return "“\(fileName)” looks damaged or has no readable pages."
         case .pdfPageRenderFailed(let pageNumber):
             return "Page \(pageNumber) could not be rendered."
-        case .fileCopyFailed:
-            return "The file could not be copied into Vision Notes."
-        case .fileWriteFailed:
-            return "The file could not be saved."
+        case .fileCopyFailed(let reason):
+            return "The file could not be copied into Vision Notes: \(reason)"
+        case .fileWriteFailed(let reason):
+            return "The file could not be saved: \(reason)"
         case .fileMissing(let fileName):
             return "“\(fileName)” is missing from local storage."
-        case .fileDeleteFailed:
-            return "Some local files could not be deleted."
-        case .ocrRequestFailed:
-            return "Text recognition failed."
+        case .fileDeleteFailed(let reason):
+            return "Some local files could not be deleted: \(reason)"
+        case .ocrRequestFailed(let reason):
+            return "Text recognition failed: \(reason)"
         case .noTextRecognized:
             return "No text was recognized on this page."
-        case .persistenceSaveFailed:
-            return "Your changes could not be saved."
+        case .persistenceSaveFailed(let reason):
+            return "Your changes could not be saved: \(reason)"
         case .processingCancelled:
             return "Processing was cancelled."
         }

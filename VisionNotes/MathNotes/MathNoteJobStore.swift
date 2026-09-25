@@ -86,27 +86,6 @@ actor MathNoteJobStore {
         return manifest
     }
 
-    func setCloudFallbackConsent(_ id: UUID, allowed: Bool) throws -> MathNoteJobManifest {
-        var manifest = try load(id)
-        manifest.cloudFallbackAllowed = allowed
-        manifest.updatedAt = Date()
-        try save(manifest)
-        return manifest
-    }
-
-    /// Consumes the job's one-shot upload authorization. Call this before
-    /// constructing a provider request; retries must be confirmed again.
-    func consumeCloudFallbackConsent(_ id: UUID) throws -> MathNoteJobManifest {
-        var manifest = try load(id)
-        guard manifest.allowsCloudFallback else {
-            throw MathNoteError.cloudFallbackNotAuthorized
-        }
-        manifest.cloudFallbackAllowed = false
-        manifest.updatedAt = Date()
-        try save(manifest)
-        return manifest
-    }
-
     func save(_ manifest: MathNoteJobManifest) throws {
         try write(encoder.encode(manifest), relativePath: "manifest.json", jobID: manifest.id)
     }

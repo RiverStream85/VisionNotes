@@ -262,7 +262,6 @@ final class AcademicOCRTests: XCTestCase {
         XCTAssertEqual(loaded.pages.map(\.index), [0, 1])
         XCTAssertEqual(loaded.pages.map(\.sourcePath), ["pages/page-001.jpg", "pages/page-002.jpg"])
         XCTAssertEqual(loaded.stage, .baseOCR)
-        XCTAssertFalse(loaded.allowsCloudFallback)
         let persistedPage = directory
             .appendingPathComponent(job.id.uuidString.lowercased())
             .appendingPathComponent("pages/page-001.jpg")
@@ -318,7 +317,6 @@ final class AcademicOCRTests: XCTestCase {
         let cloudOCRExists = await store.exists(relativePath: "cloud-ocr.json", jobID: job.id)
         let renderCount = await renderer.renderCount
         XCTAssertEqual(paused.stage, .awaitingCloudConsent)
-        XCTAssertFalse(paused.allowsCloudFallback)
         XCTAssertEqual(paused.failureMessage, MathNoteError.localInferenceUnavailable.localizedDescription)
         XCTAssertEqual(paused.stageDetail, "Local state saved · nothing uploaded")
         XCTAssertEqual(preservedCheckpoint, cachedData)
@@ -345,69 +343,7 @@ final class AcademicOCRTests: XCTestCase {
         let cloudOCRExists = await store.exists(relativePath: "cloud-ocr.json", jobID: job.id)
         XCTAssertEqual(failed.stage, .failed)
         XCTAssertNotEqual(failed.stage, .awaitingCloudConsent)
-        XCTAssertFalse(failed.allowsCloudFallback)
         XCTAssertFalse(cloudOCRExists)
-    }
-
-    func testCloudFallbackAuthorizationIsOneShot() async throws {
-        let directory = makeTemporaryDirectory()
-        let store = MathNoteJobStore(rootURL: directory)
-        let job = try await store.createJob(
-            title: "One-shot cloud authorization",
-            normalizedPages: [Data("page".utf8)]
-        )
-
-        _ = try await store.setCloudFallbackConsent(job.id, allowed: true)
-        let consumed = try await store.consumeCloudFallbackConsent(job.id)
-
-        XCTAssertFalse(consumed.allowsCloudFallback)
-        await XCTAssertThrowsErrorAsync {
-            _ = try await store.consumeCloudFallbackConsent(job.id)
-        }
-    }
-
-    func testPersistedFlagAloneCannotAuthorizeAnUpload() async throws {
-        let directory = makeTemporaryDirectory()
-        let store = MathNoteJobStore(rootURL: directory)
-        let job = try await store.createJob(
-            title: "Stale authorization",
-            normalizedPages: [try makeBlankPageData()]
-        )
-        _ = try await store.setCloudFallbackConsent(job.id, allowed: true)
-        let pipeline = MathNotePipeline(
-            store: store,
-            renderer: RendererSpy(),
-            localReconstructor: { _ in throw MathNoteError.localInferenceUnavailable }
-        )
-
-        await XCTAssertThrowsErrorAsync { _ = try await pipeline.run(jobID: job.id) }
-
-        let paused = try await store.load(job.id)
-        let cloudOCRExists = await store.exists(relativePath: "cloud-ocr.json", jobID: job.id)
-        XCTAssertEqual(paused.stage, .awaitingCloudConsent)
-        XCTAssertFalse(paused.allowsCloudFallback)
-        XCTAssertFalse(cloudOCRExists)
-    }
-
-    func testCancelledRetryClearsUnusedCloudAuthorization() async throws {
-        let directory = makeTemporaryDirectory()
-        let store = MathNoteJobStore(rootURL: directory)
-        let job = try await store.createJob(
-            title: "Cancelled authorization",
-            normalizedPages: [try makeBlankPageData()]
-        )
-        _ = try await store.setCloudFallbackConsent(job.id, allowed: true)
-        let pipeline = MathNotePipeline(
-            store: store,
-            renderer: RendererSpy(),
-            localReconstructor: { _ in throw CancellationError() }
-        )
-
-        await XCTAssertThrowsErrorAsync { _ = try await pipeline.run(jobID: job.id) }
-
-        let cancelled = try await store.load(job.id)
-        XCTAssertEqual(cancelled.stage, .cancelled)
-        XCTAssertFalse(cancelled.allowsCloudFallback)
     }
 
     func testCachedRebuildUsesOnlyLocalRendererAndProducesArchive() async throws {
@@ -429,7 +365,7 @@ final class AcademicOCRTests: XCTestCase {
         XCTAssertEqual(editedSource, "# Edited\n\n$\\frac{1}{2}$")
     }
 
-    func testZIPWriterCreatesStandardHeadersAndExcludesCredentialNamedFiles() throws {
+    func testZIPWriterCreatesStandardHeaders() throws {
         let directory = makeTemporaryDirectory()
         let archiveURL = directory.appendingPathComponent("artifacts.zip")
         let entries = [
@@ -443,7 +379,6 @@ final class AcademicOCRTests: XCTestCase {
         let text = String(decoding: archive, as: UTF8.self)
         XCTAssertTrue(text.contains("document.md"))
         XCTAssertTrue(text.contains("assets/figure.png"))
-        XCTAssertFalse(text.lowercased().contains("providerkeys"))
     }
 
     func testProviderKeysAreNotBundledAsPlistResources() throws {
@@ -494,7 +429,6 @@ final class AcademicOCRTests: XCTestCase {
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         object.removeValue(forKey: "stageProgress")
         object.removeValue(forKey: "stageDetail")
-        object.removeValue(forKey: "cloudFallbackAllowed")
         let legacyData = try JSONSerialization.data(withJSONObject: object)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601

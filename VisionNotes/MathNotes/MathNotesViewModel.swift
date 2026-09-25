@@ -96,7 +96,7 @@ final class MathNotesViewModel {
                 self.selectedJob = refreshed
             }
         } catch {
-            errorMessage = "Saved Academic jobs could not be loaded."
+            errorMessage = "Saved Academic jobs could not be loaded: \(error.localizedDescription)"
         }
     }
 
@@ -112,7 +112,7 @@ final class MathNotesViewModel {
                     draftPages.append(MathNoteDraftPage(data: normalized))
                 }
             } catch {
-                errorMessage = error.mathNoteSafeMessage
+                errorMessage = error.localizedDescription
             }
         }
     }
@@ -143,7 +143,7 @@ final class MathNotesViewModel {
                     draftPages.append(MathNoteDraftPage(data: normalized))
                 }
             } catch {
-                errorMessage = error.mathNoteSafeMessage
+                errorMessage = error.localizedDescription
             }
         }
     }
@@ -168,7 +168,7 @@ final class MathNotesViewModel {
                 guard let current = draftPages.firstIndex(where: { $0.id == id }) else { return }
                 draftPages[current].data = rotated
             } catch {
-                errorMessage = error.mathNoteSafeMessage
+                errorMessage = error.localizedDescription
             }
         }
     }
@@ -251,12 +251,8 @@ final class MathNotesViewModel {
             defer { processingTask = nil }
             activeJobID = job.id
             do {
-                // Validate both BYOK values before recording consent so a clean
-                // install stays in the recoverable awaiting state.
+                // Check the keys first so a missing key leaves the job awaiting the cloud choice.
                 _ = try ProviderKeys.load(store: credentialStore)
-                let consented = try await store.setCloudFallbackConsent(job.id, allowed: true)
-                upsert(consented)
-                if selectedJob?.id == job.id { selectedJob = consented }
                 _ = try await pipeline.run(
                     jobID: job.id,
                     cloudFallbackAuthorized: true,
@@ -283,7 +279,7 @@ final class MathNotesViewModel {
             credentialStatusMessage = "Mistral key saved on this device."
             refreshCloudCredentialStatus()
         } catch {
-            errorMessage = error.mathNoteSafeMessage
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -294,7 +290,7 @@ final class MathNotesViewModel {
             credentialStatusMessage = "Qwen3-VL / SiliconFlow key saved on this device."
             refreshCloudCredentialStatus()
         } catch {
-            errorMessage = error.mathNoteSafeMessage
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -305,7 +301,7 @@ final class MathNotesViewModel {
             credentialStatusMessage = "Mistral key removed from this device."
             refreshCloudCredentialStatus()
         } catch {
-            errorMessage = "The Mistral key could not be removed from the device Keychain."
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -316,7 +312,7 @@ final class MathNotesViewModel {
             credentialStatusMessage = "Qwen3-VL / SiliconFlow key removed from this device."
             refreshCloudCredentialStatus()
         } catch {
-            errorMessage = "The Qwen3-VL / SiliconFlow key could not be removed from the device Keychain."
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -336,7 +332,7 @@ final class MathNotesViewModel {
             selectedJobDirectory = directory
         } catch {
             guard requestedJobID == id else { return }
-            errorMessage = error.mathNoteSafeMessage
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -360,7 +356,7 @@ final class MathNotesViewModel {
                 if selectedJob?.id == updated.id { selectedJob = updated }
                 upsert(updated)
             } catch {
-                errorMessage = error.mathNoteSafeMessage
+                errorMessage = error.localizedDescription
                 await loadJobs()
             }
         }
@@ -380,7 +376,7 @@ final class MathNotesViewModel {
                 }
                 await loadJobs()
             } catch {
-                errorMessage = "The saved job could not be deleted."
+                errorMessage = "The saved job could not be deleted: \(error.localizedDescription)"
             }
         }
     }
@@ -397,7 +393,7 @@ final class MathNotesViewModel {
                 selectedSource = ""
                 selectedJobDirectory = nil
             } catch {
-                errorMessage = "Saved Academic jobs could not be deleted."
+                errorMessage = "Saved Academic jobs could not be deleted: \(error.localizedDescription)"
             }
         }
     }
@@ -452,7 +448,7 @@ final class MathNotesViewModel {
             // the same condition as a generic conversion-failure alert.
             return
         }
-        errorMessage = error.mathNoteSafeMessage
+        errorMessage = error.localizedDescription
     }
 
     nonisolated private static func renderPDFPages(_ url: URL) async throws -> [Data] {

@@ -60,6 +60,10 @@ public struct FirebirdGenerationMetrics: Codable, Sendable {
 
 public struct FirebirdReconstruction: Sendable {
     public let markdown: String
+    /// Text elements with locations, for a `.spotting` recipe; otherwise empty.
+    public let lines: [FirebirdTextLine]
+    /// The model's output as generated, which is what `resumingFrom` takes.
+    public let output: String
     public let metrics: FirebirdGenerationMetrics
 }
 
@@ -82,15 +86,25 @@ public actor FirebirdRuntime {
     /// The limits chosen for this device at load time.
     public func deviceBudget() -> FirebirdDeviceBudget? { budget }
 
+    /// Loads a Qwen3-VL (`qwen3_vl`) or PaddleOCR-VL (`paddleocr_vl`) checkpoint.
     public func load(directory: URL, options: FirebirdRuntimeOptions = .init()) async throws {
         guard container == nil else { return }
         let data = try Data(contentsOf: directory.appendingPathComponent("config.json"))
         let raw = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        guard raw?["model_type"] as? String == "qwen3_vl" else { throw FirebirdRuntimeError.unsupportedConfiguration }
-        let config = try JSONDecoder().decode(Qwen3VLConfiguration.self, from: data)
-        let text = config.textConfiguration
-        let footprint = FirebirdModelFootprint(weightBytes: try Self.weightBytes(in: directory),
-            layers: text.numHiddenLayers, kvHeads: text.numKeyValueHeads, headDim: text.headDim)
+        let modelType = raw?["model_type"] as? String
+        let footprint: FirebirdModelFootprint
+        switch modelType {
+        case "qwen3_vl":
+            let text = try JSONDecoder().decode(Qwen3VLConfiguration.self, from: data).textConfiguration
+            footprint = FirebirdModelFootprint(weightBytes: try Self.weightBytes(in: directory),
+                layers: text.numHiddenLayers, kvHeads: text.numKeyValueHeads, headDim: text.headDim)
+        case "paddleocr_vl":
+            let config = try JSONDecoder().decode(PaddleOCRVLConfiguration.self, from: data)
+            footprint = FirebirdModelFootprint(weightBytes: try Self.weightBytes(in: directory),
+                layers: config.numHiddenLayers, kvHeads: config.numKeyValueHeads, headDim: config.headDim)
+        default:
+            throw FirebirdRuntimeError.unsupportedConfiguration
+        }
 
         // Size resolution and context from what this process may use, measured
         // before the weights are resident, instead of from a device name.
@@ -107,23 +121,44 @@ public actor FirebirdRuntime {
 
         var configuration = ModelConfiguration(directory: directory)
         // Honor every stop token in the checkpoint, including end-of-text.
-        struct GenerationConfig: Decodable { let eos_token_id: [Int] }
-        let generationConfig = try JSONDecoder().decode(GenerationConfig.self,
-            from: Data(contentsOf: directory.appendingPathComponent("generation_config.json")))
-        configuration.eosTokenIds = Set(generationConfig.eos_token_id)
+        configuration.eosTokenIds = try Self.stopTokens(in: directory)
         let tokenizer = try await loadTokenizer(configuration: configuration, hub: HubApi())
-        let processorConfig = try Self.processorConfiguration(in: directory, maxPixels: budget.maxPixels)
-        let model = Qwen3VL(config)
+        let model: any VLMModel
+        let processor: any UserInputProcessor
+        if modelType == "paddleocr_vl" {
+            let config = try JSONDecoder().decode(PaddleOCRVLConfiguration.self, from: data)
+            var processorConfig = try JSONDecoder().decode(PaddleOCRVLProcessorConfiguration.self,
+                from: Data(contentsOf: directory.appendingPathComponent("preprocessor_config.json")))
+            processorConfig.maxPixels = min(processorConfig.maxPixels, budget.maxPixels)
+            model = PaddleOCRVL(config)
+            processor = PaddleOCRVLProcessor(processorConfig, tokenizer: tokenizer, imageTokenId: config.imageTokenId)
+            decodeAttention = .mlx
+        } else {
+            model = Qwen3VL(try JSONDecoder().decode(Qwen3VLConfiguration.self, from: data))
+            processor = Qwen3VLProcessor(try Self.processorConfiguration(in: directory, maxPixels: budget.maxPixels),
+                                         tokenizer: tokenizer)
+            decodeAttention = Self.verifiedDecodeAttention(options.decodeAttention, logger: logger)
+        }
         let base = try JSONDecoder().decode(BaseConfiguration.self, from: data)
         // loadWeights evaluates all model tensors before temporary plaintext is removed.
         try loadWeights(modelDirectory: directory, model: model, perLayerQuantization: base.perLayerQuantization)
-        decodeAttention = Self.verifiedDecodeAttention(options.decodeAttention, logger: logger)
-        model.setDecodeAttention(decodeAttention)
+        (model as? Qwen3VL)?.setDecodeAttention(decodeAttention)
         logger.notice("Local model weights loaded; MLX active MiB: \(Memory.activeMemory / 1_048_576)")
         self.budget = budget
         self.options = options
         container = ModelContainer(context: .init(configuration: configuration, model: model,
-            processor: Qwen3VLProcessor(processorConfig, tokenizer: tokenizer), tokenizer: tokenizer))
+            processor: processor, tokenizer: tokenizer))
+    }
+
+    /// `eos_token_id` is a list in Qwen3-VL's generation config and one id in PaddleOCR-VL's.
+    static func stopTokens(in directory: URL) throws -> Set<Int> {
+        let data = try Data(contentsOf: directory.appendingPathComponent("generation_config.json"))
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        switch object?["eos_token_id"] {
+        case let id as Int: return [id]
+        case let ids as [Int]: return Set(ids)
+        default: throw FirebirdRuntimeError.unsupportedConfiguration
+        }
     }
 
     static func makeInput(image: CIImage, prompt: String) -> UserInput {
@@ -139,8 +174,9 @@ public actor FirebirdRuntime {
         return String(partial[...newline])
     }
 
-    /// Appends already generated tokens after the assistant-turn header. The
-    /// chat template ends with `<|im_start|>assistant\n`, so they continue it.
+    /// Appends already generated tokens after the assistant-turn header. Both
+    /// prompts end with that header (`<|im_start|>assistant\n` for Qwen3-VL,
+    /// `Assistant:\n` for PaddleOCR-VL), so the tokens continue the answer.
     static func appending(_ tokens: [Int], to input: LMInput) -> LMInput {
         guard !tokens.isEmpty else { return input }
         let prefix = MLXArray(tokens.map(Int32.init)).expandedDimensions(axis: 0).asType(input.text.tokens.dtype)
@@ -208,7 +244,9 @@ public actor FirebirdRuntime {
             switch outcome {
             case .completed(let text, let info, let firstText):
                 await progress?(.finishing)
-                let markdown = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let output = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let lines = recipe.output == .spotting ? FirebirdSpotting(parsing: output).lines : []
+                let markdown = recipe.output == .spotting ? FirebirdSpotting(lines: lines).markdown : output
                 guard !markdown.isEmpty else { throw FirebirdRuntimeError.incompleteGeneration }
                 let metrics = FirebirdGenerationMetrics(tier: budget.tier.rawValue, maxPixels: budget.maxPixels,
                     decodeAttention: decodeAttention.rawValue, attempts: attempt, promptTokens: promptTokens,
@@ -217,16 +255,21 @@ public actor FirebirdRuntime {
                     decodeTokensPerSecond: info.tokensPerSecond, totalSeconds: Date().timeIntervalSince(started),
                     peakMemoryBytes: Memory.peakMemory)
                 logger.notice("Page complete; attempts \(attempt), \(info.tokensPerSecond, format: .fixed(precision: 1)) tok/s, MLX peak MiB: \(Memory.peakMemory / 1_048_576)")
-                return FirebirdReconstruction(markdown: markdown, metrics: metrics)
+                return FirebirdReconstruction(markdown: markdown, lines: lines, output: output, metrics: metrics)
             case .outputLimit(let text):
-                throw FirebirdRuntimeError.incomplete(.outputLimit,
-                    partialMarkdown: text.trimmingCharacters(in: .whitespacesAndNewlines))
+                throw FirebirdRuntimeError.incomplete(.outputLimit, partialMarkdown: Self.draft(text, recipe: recipe))
             case .repetitionLoop(let text):
                 logger.notice("Repetition loop on attempt \(attempt); \(recipe.attempts.count - attempt) attempts remain")
-                partial = loopDetector.trimmingLoop(text).trimmingCharacters(in: .whitespacesAndNewlines)
+                partial = Self.draft(loopDetector.trimmingLoop(text), recipe: recipe)
             }
         }
         throw FirebirdRuntimeError.incomplete(.repetitionLoop, partialMarkdown: partial)
+    }
+
+    /// Readable text of an unfinished page, without location tokens.
+    static func draft(_ text: String, recipe: FirebirdRecipe) -> String {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return recipe.output == .spotting ? FirebirdSpotting(parsing: text).markdown : text
     }
 
     private enum Outcome {

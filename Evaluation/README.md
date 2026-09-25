@@ -51,7 +51,27 @@ Run it in Release; Debug compiles the MLX core at `-O0` and decodes about
 and sample, the prompt and output tokens, time to first token, decode tokens/s,
 total time, peak memory and CER. `testResumeMatchesUninterruptedGeneration`
 uses the same config: it transcribes each sample, resumes from the first half
-of the output, and requires the resumed page to match.
+of the output, and requires the resumed page to match. For spotting it requires
+the same lines and allows each box corner to move by 0.005: coordinate tokens
+are near ties, and batched prefill rounds differently from one-token decode.
+
+The same harness runs PaddleOCR-VL-1.5. Point `modelPath` at its checkpoint
+(`Tools/download_firebird_model.py --model paddleocr-vl`), set `"recipe":
+"paddle-spotting"` (or `"paddle-text"`, top level or per variant) and give
+samples their `"lines"` file; spotting runs then also write the raw output
+(`.txt`) and report the box metrics described below.
+
+`PaddleOCRVLTests.testMatchesMLXVLMReference` checks the Swift port against
+mlx-vlm tensors listed in `work/Evaluation/paddle-reference.json`:
+
+    {"modelPath": "/path/to/PaddleOCRVLModel",
+     "references": [{"tensors": "screenshot-spot.safetensors",
+                     "image": "../../Evaluation/screenshot-ocr-test.png", "prompt": "Spotting:"}]}
+
+Write the tensors with `Evaluation/paddle_reference.py IMAGE PROMPT OUT
+[MAX_TOKENS]` (mlx-vlm 0.7.3). The test compares prompt ids, grid, the
+processor's pixels, vision features (mean cosine; single tokens differ by bf16
+rounding alone), first-token logits and the greedy continuation.
 
 xctest cannot read files on an external volume without Full Disk Access
 ("Operation not permitted"); copy the checkout and model to the internal disk

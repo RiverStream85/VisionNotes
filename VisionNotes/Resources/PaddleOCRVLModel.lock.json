@@ -1,0 +1,36 @@
+{
+  "model": "mlx-community/PaddleOCR-VL-1.5-4bit",
+  "revision": "3404726b40ac30b6e4e3d37c504e3f96c9c6c984",
+  "assets": [
+    {
+      "name": "config.json",
+      "bytes": 2483,
+      "sha256": "e17df4c3cf9ddad33a8449d65d0da911b4187d4ba565a421e4faecc8d1e488c7"
+    },
+    {
+      "name": "tokenizer.json",
+      "bytes": 11189060,
+      "sha256": "c8a215a59183d0d0781adc33bacd3ce6162716f7fd568fb30234a74d69803a7d"
+    },
+    {
+      "name": "tokenizer_config.json",
+      "bytes": 876,
+      "sha256": "dbdaa32276c60eb38b7986ba7c63fa5b66def3a06141ff2184ea9923dacea436"
+    },
+    {
+      "name": "preprocessor_config.json",
+      "bytes": 641,
+      "sha256": "111872ab1e8bb7fd040ac5087bfced7ab8f011f02139b088cba294964c3b1d0e"
+    },
+    {
+      "name": "generation_config.json",
+      "bytes": 133,
+      "sha256": "a6701d78ab3b4d972307cdec3b69d4c13f46e0d5140514f50ab7d84259324b94"
+    },
+    {
+      "name": "model.safetensors",
+      "bytes": 703562711,
+      "sha256": "f9a45393e2ffe6cbb412c25c82704fbb081e952c4c4517fa01e8a750010d1267"
+    }
+  ]
+}

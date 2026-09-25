@@ -10,6 +10,8 @@ import UIKit
 final class ImportViewModel {
     private(set) var stage: ImportStage?
     private(set) var progress: Double = 0
+    /// The page Firebird is writing during `.reconstructing`.
+    private(set) var livePreview: String?
     private(set) var lastImportedTitle: String?
     var errorAlert: ErrorAlert?
 
@@ -57,6 +59,7 @@ final class ImportViewModel {
         task = nil
         stage = nil
         progress = 0
+        livePreview = nil
     }
 
     func dismissCompletion() {
@@ -77,13 +80,16 @@ final class ImportViewModel {
         progress = 0
 
         let service = DocumentProcessingService(modelContext: modelContext)
+        service.reconstructionPreview = { [weak self] markdown in self?.livePreview = markdown }
         task = Task { [weak self] in
             do {
                 let document = try await operation(service) { stage, value in
+                    if stage != .reconstructing { self?.livePreview = nil }
                     self?.stage = stage
                     self?.progress = value
                 }
                 guard !Task.isCancelled else { return }
+                self?.livePreview = nil
                 self?.lastImportedTitle = document.title
                 self?.stage = .complete
                 self?.progress = 1
@@ -92,6 +98,7 @@ final class ImportViewModel {
                 let appError = AppError.wrap(error) { AppError.ocrRequestFailed(reason: $0) }
                 self.stage = nil
                 self.progress = 0
+                self.livePreview = nil
                 if appError != .processingCancelled {
                     self.errorAlert = ErrorAlert(appError)
                 }

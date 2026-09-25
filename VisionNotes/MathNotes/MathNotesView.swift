@@ -513,6 +513,18 @@ private struct MathNoteJobDetailView: View {
         .task(id: jobID) { await viewModel.selectJob(jobID) }
     }
 
+    private func livePreview(_ preview: MathNotesViewModel.LivePreview, pageCount: Int) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(pageCount > 1 ? "Reading page \(preview.pageIndex + 1) of \(pageCount)" : "Reading page")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            LiveMarkdownPreview(markdown: preview.markdown)
+                .frame(height: 320)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .accessibilityLabel("Live preview of the page being read")
+        }
+    }
+
     private func statusCard(_ job: MathNoteJobManifest) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -535,6 +547,9 @@ private struct MathNoteJobDetailView: View {
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                if let preview = viewModel.livePreview, preview.jobID == job.id, !preview.markdown.isEmpty {
+                    livePreview(preview, pageCount: job.pageCount)
+                }
                 Text("iOS may pause this work in the background. Every completed stage is saved and can resume safely.")
                     .font(.caption)
                     .foregroundStyle(.secondary)

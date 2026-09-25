@@ -3,11 +3,14 @@ import OSLog
 
 struct MathNotePipeline: Sendable {
     typealias ProgressHandler = @Sendable (MathNoteJobManifest) async -> Void
+    /// Page text written so far by the local model, for the live preview.
+    typealias PreviewHandler = @Sendable (_ pageIndex: Int, _ markdown: String) async -> Void
+    typealias StatusHandler = @Sendable (String) async -> Void
     typealias LocalReconstructor = @Sendable (Data) async throws -> FirebirdCompletion
 
     private let store: MathNoteJobStore
     private let renderer: any AcademicDocumentRendering
-    private let localReconstructor: @Sendable (Data, @escaping @Sendable (String) async -> Void) async throws -> FirebirdCompletion
+    private let localReconstructor: @Sendable (Data, @escaping StatusHandler, @escaping StatusHandler) async throws -> FirebirdCompletion
 
     init(
         store: MathNoteJobStore = .shared,
@@ -17,11 +20,11 @@ struct MathNotePipeline: Sendable {
         self.store = store
         self.renderer = renderer
         if let localReconstructor {
-            self.localReconstructor = { data, _ in try await localReconstructor(data) }
+            self.localReconstructor = { data, _, _ in try await localReconstructor(data) }
         } else {
             let localModel = FirebirdLocalModel()
-            self.localReconstructor = { imageData, detail in
-                try await localModel.reconstruct(imageData: imageData, progress: detail)
+            self.localReconstructor = { imageData, detail, preview in
+                try await localModel.reconstruct(imageData: imageData, progress: detail, preview: preview)
             }
         }
     }
@@ -29,7 +32,8 @@ struct MathNotePipeline: Sendable {
     func run(
         jobID: UUID,
         cloudFallbackAuthorized: Bool = false,
-        progress: ProgressHandler? = nil
+        progress: ProgressHandler? = nil,
+        preview: PreviewHandler? = nil
     ) async throws -> MathNoteJobManifest {
         var operation = "Preparing source"
         do {
@@ -39,7 +43,7 @@ struct MathNotePipeline: Sendable {
             let refinements: [MathNotePageRefinement]
             do {
                 operation = "Local reconstruction"
-                refinements = try await localRefinements(manifest: manifest, progress: progress)
+                refinements = try await localRefinements(manifest: manifest, progress: progress, preview: preview)
             } catch is CancellationError {
                 throw CancellationError()
             } catch let error as MathNoteError where error == .localInferenceUnavailable {
@@ -186,7 +190,8 @@ struct MathNotePipeline: Sendable {
 
     private func localRefinements(
         manifest: MathNoteJobManifest,
-        progress: ProgressHandler?
+        progress: ProgressHandler?,
+        preview: PreviewHandler?
     ) async throws -> [MathNotePageRefinement] {
         var refinements: [MathNotePageRefinement] = []
         for pageIndex in manifest.pages.indices {
@@ -226,13 +231,15 @@ struct MathNotePipeline: Sendable {
             )
             let completion: FirebirdCompletion
             do {
-                completion = try await localReconstructor(sourceData) { detail in
-                    // No page content is included in status updates.
+                completion = try await localReconstructor(sourceData, { detail in
                     guard !Task.isCancelled else { return }
                     try? await reportRefinementProgress(
                         jobID: manifest.id, pageIndex: pageIndex, pageCount: manifest.pageCount,
                         localFraction: 0.1, detail: detail, progress: progress)
-                }
+                }, { markdown in
+                    guard !Task.isCancelled else { return }
+                    await preview?(pageIndex, markdown)
+                })
             } catch FirebirdLocalFailure.incomplete(let reason, let markdown) {
                 // An incomplete draft must never become a completed page checkpoint.
                 try await store.write(Data(markdown.utf8),

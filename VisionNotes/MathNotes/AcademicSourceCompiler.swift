@@ -1,6 +1,68 @@
 import Foundation
 
 enum AcademicSourceCompiler {
+    /// Shared by exported HTML and the live preview shown while a page is read.
+    static let documentStyle = """
+        @page { size: A4; margin: 18mm 17mm 20mm; }
+        :root { color-scheme: light dark; --ink:#172033; --muted:#667085; --rule:#d7dce5; --warn:#fff1c2; }
+        * { box-sizing:border-box; }
+        html { background:#fff; }
+        body { margin:0 auto; max-width:920px; padding:36px 42px 64px; color:var(--ink); background:#fff;
+               font:17px/1.62 -apple-system,BlinkMacSystemFont,"New York","Noto Serif CJK SC",serif; }
+        h1,h2,h3,h4 { line-height:1.25; margin:1.25em 0 .5em; break-after:avoid; }
+        h1 { font-size:2rem; border-bottom:1px solid var(--rule); padding-bottom:.32em; }
+        h2 { font-size:1.45rem; } h3 { font-size:1.18rem; }
+        p { margin:.72em 0; orphans:3; widows:3; }
+        ul,ol { padding-left:1.6em; } li { margin:.28em 0; }
+        table { width:100%; border-collapse:collapse; margin:1em 0; break-inside:avoid; }
+        th,td { border:1px solid var(--rule); padding:.42em .55em; vertical-align:top; }
+        img { display:block; max-width:100%; max-height:245mm; object-fit:contain; margin:1em auto .35em; break-inside:avoid; }
+        figure { margin:1.2em 0; break-inside:avoid; } figcaption { text-align:center; color:var(--muted); font-size:.88em; }
+        math { font-size:1.06em; max-width:100%; }
+        .display-math { display:block; overflow-x:auto; margin:.9em 0; padding:.12em 0; break-inside:avoid; text-align:center; }
+        .unclear { background:var(--warn); color:#6b4f00; border-radius:4px; padding:0 .18em; }
+        .toc { border:1px solid var(--rule); border-radius:10px; padding:1em 1.2em; margin:1.2em 0 2em; break-inside:avoid; }
+        .toc h2 { margin:0 0 .5em; font-size:1.12rem; } .toc ol { margin:0; }
+        .toc .level-2 { margin-left:1em; } .toc .level-3,.toc .level-4 { margin-left:2em; }
+        .toc a { color:inherit; text-decoration:none; border-bottom:1px dotted var(--muted); }
+        .page-break { break-before:page; page-break-before:always; height:0; }
+        .renderer-note { color:var(--muted); font:12px/1.4 -apple-system,sans-serif; margin-bottom:2em; }
+        @media print {
+          :root { color-scheme:light; } html,body { background:#fff; color:#111; }
+          body { max-width:none; padding:0; font-size:11pt; }
+          .renderer-note { font-size:8pt; }
+          .display-math { overflow:visible; }
+        }
+        @media (prefers-color-scheme:dark) and (screen) {
+          :root { --ink:#e7eaf0; --muted:#aab2c0; --rule:#3b4351; --warn:#5a4610; }
+          html,body { background:#151922; }
+        }
+        """
+
+    /// Body HTML for a page that may still be generating: an unfinished
+    /// construct renders as escaped text instead of failing the preview.
+    static func previewBodyHTML(markdown: String) -> String {
+        let assetRoot = FileManager.default.temporaryDirectory
+        if let body = try? MarkdownHTMLRenderer(assetRoot: assetRoot).render(markdown) { return body }
+        return "<pre style=\"white-space:pre-wrap\">\(escapeHTML(markdown))</pre>"
+    }
+
+    /// An empty page with the export stylesheet; `LiveMarkdownPreview` fills `#page`.
+    static let previewShellHTML = """
+        <!doctype html>
+        <html lang="en">
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width,initial-scale=1">
+          <style>
+          \(documentStyle)
+          body { padding:16px 18px 32px; font-size:15px; }
+          </style>
+        </head>
+        <body><div id="page"></div></body>
+        </html>
+        """
+
     static func standaloneHTML(markdown: String, title: String, assetRoot: URL) throws -> String {
         let body = try MarkdownHTMLRenderer(assetRoot: assetRoot).render(markdown)
         return """
@@ -13,40 +75,7 @@ enum AcademicSourceCompiler {
           <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; script-src 'none'; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
           <title>\(escapeHTML(title))</title>
           <style>
-            @page { size: A4; margin: 18mm 17mm 20mm; }
-            :root { color-scheme: light dark; --ink:#172033; --muted:#667085; --rule:#d7dce5; --warn:#fff1c2; }
-            * { box-sizing:border-box; }
-            html { background:#fff; }
-            body { margin:0 auto; max-width:920px; padding:36px 42px 64px; color:var(--ink); background:#fff;
-                   font:17px/1.62 -apple-system,BlinkMacSystemFont,"New York","Noto Serif CJK SC",serif; }
-            h1,h2,h3,h4 { line-height:1.25; margin:1.25em 0 .5em; break-after:avoid; }
-            h1 { font-size:2rem; border-bottom:1px solid var(--rule); padding-bottom:.32em; }
-            h2 { font-size:1.45rem; } h3 { font-size:1.18rem; }
-            p { margin:.72em 0; orphans:3; widows:3; }
-            ul,ol { padding-left:1.6em; } li { margin:.28em 0; }
-            table { width:100%; border-collapse:collapse; margin:1em 0; break-inside:avoid; }
-            th,td { border:1px solid var(--rule); padding:.42em .55em; vertical-align:top; }
-            img { display:block; max-width:100%; max-height:245mm; object-fit:contain; margin:1em auto .35em; break-inside:avoid; }
-            figure { margin:1.2em 0; break-inside:avoid; } figcaption { text-align:center; color:var(--muted); font-size:.88em; }
-            math { font-size:1.06em; max-width:100%; }
-            .display-math { display:block; overflow-x:auto; margin:.9em 0; padding:.12em 0; break-inside:avoid; text-align:center; }
-            .unclear { background:var(--warn); color:#6b4f00; border-radius:4px; padding:0 .18em; }
-            .toc { border:1px solid var(--rule); border-radius:10px; padding:1em 1.2em; margin:1.2em 0 2em; break-inside:avoid; }
-            .toc h2 { margin:0 0 .5em; font-size:1.12rem; } .toc ol { margin:0; }
-            .toc .level-2 { margin-left:1em; } .toc .level-3,.toc .level-4 { margin-left:2em; }
-            .toc a { color:inherit; text-decoration:none; border-bottom:1px dotted var(--muted); }
-            .page-break { break-before:page; page-break-before:always; height:0; }
-            .renderer-note { color:var(--muted); font:12px/1.4 -apple-system,sans-serif; margin-bottom:2em; }
-            @media print {
-              :root { color-scheme:light; } html,body { background:#fff; color:#111; }
-              body { max-width:none; padding:0; font-size:11pt; }
-              .renderer-note { font-size:8pt; }
-              .display-math { overflow:visible; }
-            }
-            @media (prefers-color-scheme:dark) and (screen) {
-              :root { --ink:#e7eaf0; --muted:#aab2c0; --rule:#3b4351; --warn:#5a4610; }
-              html,body { background:#151922; }
-            }
+          \(documentStyle)
           </style>
         </head>
         <body data-math-ready="true">

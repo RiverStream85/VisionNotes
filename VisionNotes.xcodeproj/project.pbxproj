@@ -45,6 +45,7 @@
 		9F99E72757F07CD07A15DCD4 /* DemoContentRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE07CDE0F27B7A7DF0240740 /* DemoContentRenderer.swift */; };
 		A333B2905B0F27EB879C7946 /* DocumentReaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6375A6D7253D29EFE88207D5 /* DocumentReaderView.swift */; };
 		ACED789490032FDA4EBABB21 /* PDFPageMapperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19DFB5DBB85C254CCFEBAA40 /* PDFPageMapperTests.swift */; };
+		A1F0C0DE00000000000000B3 /* LiveMarkdownPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1F0C0DE00000000000000F3 /* LiveMarkdownPreview.swift */; };
 		AEDDF4EC0F4ECFD9990CC2A1 /* ImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC415B2DFBFDBE77B14AEE92 /* ImportView.swift */; };
 		B77FAFA589BD7CC13E848DAC /* PDFPageMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E24C16C330A9F97ECFC214E /* PDFPageMapper.swift */; };
 		B94CC16BB296EB188089983E /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73B46C1116F96DB1FE72ACF8 /* RootView.swift */; };
@@ -167,6 +168,7 @@
 		F45213EE8CD1BD91F703902A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		FB0000000000000000000005 /* FirebirdModelAssets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirebirdModelAssets.swift; sourceTree = "<group>"; };
 		FB0000000000000000000007 /* FirebirdModel.lock.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = FirebirdModel.lock.json; sourceTree = "<group>"; };
+		A1F0C0DE00000000000000F3 /* LiveMarkdownPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveMarkdownPreview.swift; sourceTree = "<group>"; };
 		FC415B2DFBFDBE77B14AEE92 /* ImportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportView.swift; sourceTree = "<group>"; };
 		FEF758352C9F1F1741F0C364 /* DocumentProcessingServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentProcessingServiceTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -338,6 +340,7 @@
 				6375A6D7253D29EFE88207D5 /* DocumentReaderView.swift */,
 				8DE7F46DAF5DCDF80CDBBD19 /* ImageReaderView.swift */,
 				FC415B2DFBFDBE77B14AEE92 /* ImportView.swift */,
+				A1F0C0DE00000000000000F3 /* LiveMarkdownPreview.swift */,
 				765AC2709E5C5AF9D29CA544 /* LibraryRow.swift */,
 				26F21F3F34A70C977E2D4ACE /* LibraryView.swift */,
 				99C30D66DADE50CCEEDA3876 /* OCRTextEditorView.swift */,
@@ -639,6 +642,7 @@
 				A333B2905B0F27EB879C7946 /* DocumentReaderView.swift in Sources */,
 				01D84B377A1B78D9E4594309 /* ImageReaderView.swift in Sources */,
 				AEDDF4EC0F4ECFD9990CC2A1 /* ImportView.swift in Sources */,
+				A1F0C0DE00000000000000B3 /* LiveMarkdownPreview.swift in Sources */,
 				C210D8B98207FFE671B906B7 /* LibraryRow.swift in Sources */,
 				153D076E0B6645B41EC47CF8 /* LibraryView.swift in Sources */,
 				8652A4E5B750B6BDA99BBD28 /* OCRTextEditorView.swift in Sources */,

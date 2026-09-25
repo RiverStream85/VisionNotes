@@ -34,7 +34,10 @@ struct FirebirdLocalModel: Sendable {
 
     static func checkpointPath(pageIndex: Int) -> String { identity.checkpointPath(pageIndex: pageIndex) }
 
-    func reconstruct(imageData: Data, progress: (@Sendable (String) async -> Void)? = nil) async throws -> FirebirdCompletion {
+    /// `progress` receives status lines; `preview` receives the page text
+    /// written so far, about once a second, for the live preview.
+    func reconstruct(imageData: Data, progress: (@Sendable (String) async -> Void)? = nil,
+                     preview: (@Sendable (String) async -> Void)? = nil) async throws -> FirebirdCompletion {
         #if targetEnvironment(simulator)
         // MLX requires Metal features the iOS simulator does not expose.
         throw MathNoteError.localInferenceUnavailable
@@ -65,6 +68,7 @@ struct FirebirdLocalModel: Sendable {
         do {
             let result = try await runtime.reconstruct(imageData: imageData, recipe: Self.recipe) { event in
                 await progress?(Self.describe(event))
+                if case .generating(let text, _, _) = event { await preview?(Self.previewMarkdown(text)) }
             }
             return FirebirdCompletion(markdown: Self.normalizeMarkdown(result.markdown),
                 modelIdentifier: Self.modelIdentifier)
@@ -87,7 +91,7 @@ struct FirebirdLocalModel: Sendable {
         }
     }
 
-    /// Status text only; page content never enters a status update.
+    /// Status text only; page text goes to the separate preview channel.
     static func describe(_ event: FirebirdProgress) -> String {
         switch event {
         case .preparingImage: "Preparing page image"
@@ -97,6 +101,15 @@ struct FirebirdLocalModel: Sendable {
         case .generating(let text, let elapsed, _): "Reconstructing · \(text.count) characters · \(Int(elapsed))s"
         case .finishing: "Checking completed reconstruction"
         }
+    }
+
+    /// Unfinished page text for the live preview: an opening code fence (and a
+    /// closing one, if already written) is dropped so the page renders as Markdown.
+    static func previewMarkdown(_ text: String) -> String {
+        var lines = text.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "\n")
+        if lines.first?.hasPrefix("```") == true { lines.removeFirst() }
+        if lines.last == "```" { lines.removeLast() }
+        return lines.joined(separator: "\n")
     }
 
     /// Some local generations wrap equations in a LaTeX code fence despite the

@@ -19,6 +19,8 @@ final class DocumentProcessingService {
     private let reconstructor: PageReconstructing
     private let pdfRenderer: PDFPageRendering
     private let store: DocumentStore
+    /// Receives the page Firebird is writing, about once a second, for a live preview.
+    var reconstructionPreview: (@MainActor (String) -> Void)?
 
     init(
         modelContext: ModelContext,
@@ -94,7 +96,7 @@ final class DocumentProcessingService {
             try store.save()
 
             progress?(.reconstructing, 0.5)
-            page.markdown = try await reconstructor.markdown(forImageData: prepared.sourceData)
+            page.markdown = try await reconstructor.markdown(forImageData: prepared.sourceData, preview: previewSink)
             try Task.checkCancellation()
 
             progress?(.savingResults, 0.95)
@@ -205,7 +207,7 @@ final class DocumentProcessingService {
                 let recognized = try await pipeline.recognizePage(fromImageData: data)
                 try Task.checkCancellation()
                 progress?(.reconstructing, 0.5)
-                let markdown = try await reconstructor.markdown(forImageData: data)
+                let markdown = try await reconstructor.markdown(forImageData: data, preview: previewSink)
                 try Task.checkCancellation()
                 progress?(.savingResults, 0.95)
 
@@ -264,7 +266,7 @@ final class DocumentProcessingService {
             imageData = try storage.data(forFileName: document.localFileName, in: .sources)
         }
         let recognized = try await pipeline.recognizePage(fromImageData: imageData)
-        let markdown = try await reconstructor.markdown(forImageData: imageData)
+        let markdown = try await reconstructor.markdown(forImageData: imageData, preview: previewSink)
 
         for block in page.textBlocks {
             modelContext.delete(block)
@@ -310,7 +312,7 @@ final class DocumentProcessingService {
             progress?(.recognizingText, base + 0.2 * share)
             let recognized = try await pipeline.recognizePage(fromImageData: rendered.ocrImageData)
             progress?(.reconstructing, base + 0.4 * share)
-            let markdown = try await reconstructor.markdown(forImageData: rendered.ocrImageData)
+            let markdown = try await reconstructor.markdown(forImageData: rendered.ocrImageData, preview: previewSink)
             try Task.checkCancellation()
             guard isLive(document) else { throw CancellationError() }
 
@@ -335,6 +337,11 @@ final class DocumentProcessingService {
 
     /// A document the user deleted mid-import loses its context; carrying on
     /// would write rows nothing points at.
+    private var previewSink: (@Sendable (String) async -> Void)? {
+        guard let handler = reconstructionPreview else { return nil }
+        return { markdown in await handler(markdown) }
+    }
+
     private func isLive(_ document: LibraryDocument) -> Bool {
         document.modelContext != nil
     }

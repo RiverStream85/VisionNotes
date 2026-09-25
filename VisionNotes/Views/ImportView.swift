@@ -23,6 +23,7 @@ struct ImportView: View {
                         ImportProgressCard(
                             stage: viewModel.stage ?? .preparingFile,
                             progress: viewModel.progress,
+                            preview: viewModel.livePreview,
                             completedTitle: viewModel.lastImportedTitle,
                             onCancel: viewModel.cancel,
                             onDone: viewModel.dismissCompletion
@@ -236,6 +237,7 @@ private struct ImportOptionButton: View {
 private struct ImportProgressCard: View {
     let stage: ImportStage
     let progress: Double
+    let preview: String?
     let completedTitle: String?
     let onCancel: () -> Void
     let onDone: () -> Void
@@ -268,6 +270,13 @@ private struct ImportProgressCard: View {
                             .foregroundStyle(item.rawValue <= stage.rawValue ? .primary : .secondary)
                     }
                 }
+            }
+
+            if stage == .reconstructing, let preview, !preview.isEmpty {
+                LiveMarkdownPreview(markdown: preview)
+                    .frame(height: 280)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .accessibilityLabel("Live preview of the page being read")
             }
 
             if stage == .complete, let completedTitle {

@@ -42,7 +42,19 @@ Peak MLX memory was about 2.1 GiB.
 | `screenshot-ocr-test.png` | 0.063 | 1.11 s | 81.8 tok/s | 3.69 s | 211 | 2.25 GB |
 | `handwriting-ocr-test.jpg` (synthetic) | 0.122 | 1.14 s | 79.7 tok/s | 3.70 s | 204 | 2.22 GB |
 
-Model load from the bundle: 0.80 s. The phone matches or beats the M4. The earlier ~3-minute scan came from Xcode's Run action building Debug (MLX's C++ at -O0, ~4.7× slower decode); the scheme now runs Release.
+PaddleOCR-VL-1.5 4-bit on the same phone (Release, high tier, model copied to `Documents/PaddleModel`, `VN_BENCHMARK_MODEL=paddle|paddle-text`):
+
+| Fixture | Recipe | CER | TTFT | Decode | Total | Lines | Peak MLX |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| math | spotting (boxes) | 0.065 | 2.25 s | 266 tok/s | 5.20 s | 23 | 1.09 GB |
+| screenshot | spotting (boxes) | 0.081 | 2.30 s | 273 tok/s | 3.92 s | 24 | 1.21 GB |
+| handwriting (synthetic) | spotting (boxes) | 0.033 | 3.61 s (first page) | 278 tok/s | 4.79 s | 12 | 1.08 GB |
+| math | plain OCR | 0.069 | 2.20 s | 274 tok/s | 4.30 s | – | 1.19 GB |
+| screenshot | plain OCR | 0.009 | 2.30 s | 280 tok/s | 3.13 s | – | 1.21 GB |
+| handwriting (synthetic) | plain OCR | 0.016 | 2.36 s | 280 tok/s | 3.20 s | – | 1.20 GB |
+
+Paddle load: 0.28 s. Versus Qwen3-VL on the phone: about half the memory, ~3.5× the decode rate, slower first text (vision encoder), and 1.1–1.9× faster overall. CER matches the M4 runs exactly; box accuracy was measured on the M4 only (screenshot recall 0.957, IoU 0.773), since the Swift port is token-identical to mlx-vlm.
+Qwen model load from the bundle: 0.80 s. The phone matches or beats the M4. The earlier ~3-minute scan came from Xcode's Run action building Debug (MLX's C++ at -O0, ~4.7× slower decode); the scheme now runs Release.
 Re-run with `FirebirdBenchmark` (`VisionNotes/App/FirebirdBenchmark.swift`): copy images to `Documents/Benchmark` in the app container (`xcrun devicectl device copy to --domain-type appDataContainer --domain-identifier com.visionnotes.VisionNotes ...`), then `xcrun devicectl device process launch --console --device <id> --environment-variables '{"VN_BENCHMARK":"1"}' com.visionnotes.VisionNotes`. Outputs land in `Documents/Benchmark/results.json`; score them with `TranscriptionMetrics.characterErrorRate`.
 Handwriting and figures → Markdown are not good yet; the fixture is typeset, so collect handwritten samples.
 

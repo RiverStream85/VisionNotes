@@ -68,6 +68,7 @@ enum ImportStage: Int, CaseIterable, Identifiable, Sendable {
     case preparingFile
     case renderingPages
     case recognizingText
+    case reconstructing
     case savingResults
     case complete
 
@@ -78,6 +79,7 @@ enum ImportStage: Int, CaseIterable, Identifiable, Sendable {
         case .preparingFile: return "Preparing file"
         case .renderingPages: return "Rendering pages"
         case .recognizingText: return "Recognizing text"
+        case .reconstructing: return "Reconstructing layout"
         case .savingResults: return "Saving results"
         case .complete: return "Complete"
         }

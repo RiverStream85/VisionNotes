@@ -132,8 +132,8 @@ struct PDFReaderView: View {
 
             ScrollView {
                 if let currentPage {
-                    if !currentPage.recognizedText.isEmpty {
-                        HighlightedBodyText(text: currentPage.recognizedText, terms: highlightTerms, font: .callout)
+                    if !currentPage.displayText.isEmpty {
+                        HighlightedBodyText(text: currentPage.displayText, terms: highlightTerms, font: .callout)
                     } else {
                         Text(document.processingStatus == .processing
                              ? "This page has not been recognized yet."

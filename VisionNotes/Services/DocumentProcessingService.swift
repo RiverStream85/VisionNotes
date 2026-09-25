@@ -2,7 +2,8 @@ import Foundation
 import SwiftData
 
 /// Runs an import end to end: copy the file into the sandbox, render pages,
-/// recognize text with Apple Vision, and persist the result.
+/// recognize the text layer with Apple Vision, reconstruct the visible content
+/// with Firebird, and persist the result.
 ///
 /// The service itself is `@MainActor` because it owns a `ModelContext`, which
 /// is not thread safe. Everything expensive — decoding, rendering, OCR — is
@@ -15,6 +16,7 @@ final class DocumentProcessingService {
     private let modelContext: ModelContext
     private let storage: FileStorageServicing
     private let pipeline: OCRPipeline
+    private let reconstructor: PageReconstructing
     private let pdfRenderer: PDFPageRendering
     private let store: DocumentStore
 
@@ -22,11 +24,13 @@ final class DocumentProcessingService {
         modelContext: ModelContext,
         storage: FileStorageServicing = FileStorageService.shared,
         pipeline: OCRPipeline = OCRPipeline(),
+        reconstructor: PageReconstructing = FirebirdPageReconstructor(),
         pdfRenderer: PDFPageRendering = PDFKitPageRenderer()
     ) {
         self.modelContext = modelContext
         self.storage = storage
         self.pipeline = pipeline
+        self.reconstructor = reconstructor
         self.pdfRenderer = pdfRenderer
         self.store = DocumentStore(modelContext: modelContext, storage: storage)
     }
@@ -85,10 +89,15 @@ final class DocumentProcessingService {
         do {
             let recognized = try await pipeline.recognizePage(fromImageData: prepared.sourceData)
             try Task.checkCancellation()
-
-            progress?(.savingResults, 0.85)
             page.recognizedText = recognized.text
             page.textBlocks = recognized.blocks.map { TextBlock(recognized: $0) }
+            try store.save()
+
+            progress?(.reconstructing, 0.5)
+            page.markdown = try await reconstructor.markdown(forImageData: prepared.sourceData)
+            try Task.checkCancellation()
+
+            progress?(.savingResults, 0.95)
             document.processingStatus = .completed
             document.processingProgress = 1
             document.processingError = nil
@@ -195,7 +204,10 @@ final class DocumentProcessingService {
                 progress?(.recognizingText, 0.4)
                 let recognized = try await pipeline.recognizePage(fromImageData: data)
                 try Task.checkCancellation()
-                progress?(.savingResults, 0.85)
+                progress?(.reconstructing, 0.5)
+                let markdown = try await reconstructor.markdown(forImageData: data)
+                try Task.checkCancellation()
+                progress?(.savingResults, 0.95)
 
                 let page: DocumentPage
                 if let existing = document.sortedPages.first {
@@ -213,6 +225,7 @@ final class DocumentProcessingService {
                     modelContext.delete(block)
                 }
                 page.recognizedText = recognized.text
+                page.markdown = markdown
                 page.textBlocks = recognized.blocks.map { TextBlock(recognized: $0) }
                 document.pageCount = 1
             }
@@ -229,13 +242,14 @@ final class DocumentProcessingService {
         }
     }
 
-    /// Re-runs OCR for a single page, without touching the rest of the document.
+    /// Re-runs OCR and reconstruction for a single page, without touching the
+    /// rest of the document.
     func reprocessPage(_ page: DocumentPage) async throws -> RecognizedPage {
         guard let document = page.document else {
             throw AppError.fileMissing(fileName: "page \(page.pageNumber)")
         }
 
-        let recognized: RecognizedPage
+        let imageData: Data
         if document.documentType == .pdf {
             let localURL = try storage.url(for: document.localFileName, in: .sources)
             guard storage.fileExists(document.localFileName, in: .sources) else {
@@ -245,16 +259,18 @@ final class DocumentProcessingService {
                 pageNumber: page.pageNumber,
                 at: localURL
             )
-            recognized = try await pipeline.recognizePage(fromImageData: rendered.ocrImageData)
+            imageData = rendered.ocrImageData
         } else {
-            let data = try storage.data(forFileName: document.localFileName, in: .sources)
-            recognized = try await pipeline.recognizePage(fromImageData: data)
+            imageData = try storage.data(forFileName: document.localFileName, in: .sources)
         }
+        let recognized = try await pipeline.recognizePage(fromImageData: imageData)
+        let markdown = try await reconstructor.markdown(forImageData: imageData)
 
         for block in page.textBlocks {
             modelContext.delete(block)
         }
         page.recognizedText = recognized.text
+        page.markdown = markdown
         page.textBlocks = recognized.blocks.map { TextBlock(recognized: $0) }
         document.updatedAt = Date()
         try store.save()
@@ -263,8 +279,8 @@ final class DocumentProcessingService {
 
     // MARK: - Private
 
-    /// One page at a time: render, OCR, persist, release. Nothing holds on to a
-    /// page bitmap once its text has been saved.
+    /// One page at a time: render, OCR, reconstruct, persist, release. Nothing
+    /// holds on to a page bitmap once its text has been saved.
     private func processPDFPages(
         document: LibraryDocument,
         localURL: URL,
@@ -290,14 +306,18 @@ final class DocumentProcessingService {
                 document.thumbnailData = thumbnail
             }
 
-            progress?(.recognizingText, base + 0.5 / Double(max(pageCount, 1)))
+            let share = 1 / Double(max(pageCount, 1))
+            progress?(.recognizingText, base + 0.2 * share)
             let recognized = try await pipeline.recognizePage(fromImageData: rendered.ocrImageData)
+            progress?(.reconstructing, base + 0.4 * share)
+            let markdown = try await reconstructor.markdown(forImageData: rendered.ocrImageData)
             try Task.checkCancellation()
             guard isLive(document) else { throw CancellationError() }
 
             let page = DocumentPage(
                 pageNumber: pageNumber,
                 recognizedText: recognized.text,
+                markdown: markdown,
                 imageFileName: cacheFileName
             )
             modelContext.insert(page)

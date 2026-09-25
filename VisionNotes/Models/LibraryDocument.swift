@@ -75,7 +75,7 @@ final class LibraryDocument {
     /// Short preview of the recognized text, used in library rows.
     func textPreview(maxLength: Int = 120) -> String {
         let joined = sortedPages
-            .map(\.recognizedText)
+            .map(\.displayText)
             .joined(separator: " ")
             .replacingOccurrences(of: "\n", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)

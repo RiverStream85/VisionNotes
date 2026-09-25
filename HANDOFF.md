@@ -13,12 +13,13 @@ Other OCR experiments are archived outside the repo: `~/data/system-relocation/s
 
 ## What the app does now
 
-- Library / Import tabs: Apple Vision OCR (`TextRecognitionService`), fast, plain text plus word boxes; no LaTeX.
+- Library / Import tabs: Apple Vision OCR (`TextRecognitionService`) supplies the text layer (word boxes, `DocumentPage.recognizedText`); Firebird then reconstructs the visible content as Markdown + LaTeX (`DocumentPage.markdown`, via `PageReconstructing` in `Services/PageReconstructor.swift`). Readers, the editor and search use `DocumentPage.displayText` (Markdown when present, else Vision text). Firebird runs only if the model is already present (bundled or downloaded from the Academic tab) and only while the app is active (`ForegroundGPUWork`: cancelled on resign-active, restarted on return). If it fails, is busy with an Academic job, or is unavailable, the page keeps its Vision text; "Run OCR Again" retries.
 - Academic tab: Firebird, the local Qwen3-VL-2B-Instruct 4-bit runtime (`FirebirdRuntime/`, MLX), producing Markdown + LaTeX and the existing PDF/HTML/LaTeX/ZIP exports.
 - Recipe `recipe-4` (`FirebirdRuntime/Sources/FirebirdCore/FirebirdRecipe.swift`): prompt `qwenvl markdown` (Qwen3-VL's trained document-parsing prompt), greedy decoding, DeepSeek's no-repeat 20-gram rule on the GPU, one retry with a generated-only repetition penalty.
 - Resolution and context come from available process memory (`FirebirdDeviceBudget`); default ceiling is the 1,048,576-pixel tier.
 - Decode attention uses MLX SDPA; the authored Metal kernel is opt-in (`FirebirdDecodeAttention.fusedExperimental`) and was 42% slower on an M4.
 - Model files are public and not encrypted. A development build bundles them (build phase "Bundle Firebird model" copies `work/FirebirdModel`); otherwise the Academic tab downloads them through a background URLSession with its own progress section, and they load in place.
+- Cloud fallback: after a local failure the job waits in `awaitingCloudConsent`; the explicit confirmation passes `cloudFallbackAuthorized: true` to that one run (no persisted consent flag). `input.pdf` is built only on the cloud path.
 - Notes, pages, Academic jobs and exports are plain files/SwiftData protected by iOS Data Protection; the app-level AES-GCM layer, Secure Enclave keys, temporary plaintext copies, lifecycle purge/cancel on `willResignActive` and the privacy cover were removed (owner decision, 2026-09-25). `LegacyStorageCleanup` deletes old encrypted data on launch; there are no users, so nothing is migrated.
 
 ## Measured on M4 Mac mini, Release, math fixture (`Evaluation/math-ocr-test.png`)
@@ -56,21 +57,14 @@ For unsigned compile checks over SSH: `xcodebuild build -project VisionNotes.xco
 
 ## Next steps (priority order)
 
-1. Finish the cleanup of over-defensive code (remaining items below). Owner wants unnecessary checks removed.
-2. Default scan path: Firebird for visible content, Apple Vision kept only for the text layer (search boxes, PDF text) — owner decided.
-3. Background handling: on `didEnterBackground` pause between pages and resume automatically when active (GPU work is not allowed in the background).
-4. Handwriting and figure recognition → Markdown, and a better preview. Add handwritten pages with reference transcriptions to `Evaluation/`.
-5. Record iPhone 18 Pro Max numbers (TTFT, tok/s, peak memory) and calibrate `FirebirdDeviceBudget.fixedReserve` / `reservePerPixel`, which are still estimates.
+1. Speed. Scanning a simple screenshot on the phone took about 3 minutes. Check whether the Run scheme uses Debug (MLX is ~3× slower in Debug), how many visual tokens tall screenshots produce, and whether generation runs to the output limit or retries. Evaluate smaller/faster OCR models (e.g. DeepSeek-OCR MoE, PaddleOCR-VL 0.9B, granite-docling-258M, MinerU2.5 1.2B).
+2. Background GPU: iOS 26 `BGContinuedProcessingTask` with `requiredResources = .gpu` allows GPU work in the background only where `BGTaskScheduler.supportedResources` contains `.gpu`; in Sept 2025 Apple DTS said that was M3+ iPads only, no iPhone. Check the value on the iPhone 18 Pro Max before building on it.
+3. Handwriting and figure recognition → Markdown, and a better preview (the Library readers show the Markdown source as text). Add handwritten pages with reference transcriptions to `Evaluation/`.
+4. Record iPhone 18 Pro Max numbers (TTFT, tok/s, peak memory) and calibrate `FirebirdDeviceBudget.fixedReserve` / `reservePerPixel`, which are still estimates.
+5. Optional: reduce the cloud fallback to Mistral OCR alone with `include_blocks=True` (block boxes, figure crops, equation/table regions) instead of Mistral + SiliconFlow Qwen3-VL crops and merge.
 
 ## Cleanup status
 
-Done: app-level AES-GCM and Secure Enclave key wrapping, seal-then-reopen verification, legacy plaintext migration, temporary decrypted copies and preview bookkeeping, lifecycle purge/cancel and privacy cover, duplicate `artifacts.zip` build, model-weight encryption and hashing, dead `exists()` branch.
-About 2,400 lines removed; 93 unit tests and 4 UI tests pass on the iOS simulator.
-
-Remaining candidates:
-- Cloud consent is still checked in several layers (`MathNotePipeline` run/catch branches, `MathNoteJobStore.setCloudFallbackConsent`/`consumeCloudFallbackConsent`, `MathNoteModels.allowsCloudFallback`); the explicit confirmation plus the `cloudFallbackAuthorized` parameter is enough. Tests to drop: `testCloudFallbackAuthorizationIsOneShot`, `testPersistedFlagAloneCannotAuthorizeAnUpload`, `testCancelledRetryClearsUnusedCloudAuthorization`.
-- Confirmation dialog before a purely local run (`MathNotesView`, "Process … on this iPhone?").
-- Errors are flattened to "could not finish" (`mathNoteSafeMessage`, `AppError.wrap`); show `localizedDescription`.
-- `StoredZIPWriter` "providerkeys" filter and its test.
-- `input.pdf` is built on every run but only the cloud path uses it; build it lazily in `cloudRefinements`.
-- Background: the Academic job pauses on `.inactive`/`.background` (GPU work is not allowed in the background) and resumes automatically on `.active`; the interrupted page restarts from its beginning. Finer-grained resume within a page is possible future work.
+Done: app-level AES-GCM and Secure Enclave key wrapping, seal-then-reopen verification, legacy plaintext migration, temporary decrypted copies and preview bookkeeping, lifecycle purge/cancel and privacy cover, duplicate `artifacts.zip` build, model-weight encryption and hashing, dead `exists()` branch, layered cloud-consent flag, confirmation before a local run, flattened error messages (`mathNoteSafeMessage` removed; `AppError` shows the underlying reason), ZIP "providerkeys" filter, eager `input.pdf`.
+Background: the Academic job pauses on `.inactive`/`.background` and resumes on `.active`; Library/Import reconstruction restarts the interrupted page on return. The interrupted page restarts from its beginning.
+91 unit tests and 4 UI tests pass on the iOS simulator.

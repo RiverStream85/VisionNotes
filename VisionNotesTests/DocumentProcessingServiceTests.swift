@@ -23,6 +23,14 @@ private final class MockTextRecognitionService: TextRecognitionService, @uncheck
     }
 }
 
+/// Stand-in for Firebird: returns fixed Markdown, or `nil` like a device
+/// without the model.
+private struct StubReconstructor: PageReconstructing {
+    var markdown: String?
+
+    func markdown(forImageData data: Data) async throws -> String? { markdown }
+}
+
 final class DocumentProcessingServiceTests: XCTestCase {
 
     private var root: URL!
@@ -94,7 +102,8 @@ final class DocumentProcessingServiceTests: XCTestCase {
         let service = DocumentProcessingService(
             modelContext: context,
             storage: storage,
-            pipeline: OCRPipeline(recognizer: recognizer)
+            pipeline: OCRPipeline(recognizer: recognizer),
+            reconstructor: StubReconstructor()
         )
 
         var reportedStages: [ImportStage] = []
@@ -119,6 +128,37 @@ final class DocumentProcessingServiceTests: XCTestCase {
         XCTAssertEqual(page.sortedTextBlocks.map { $0.text }, ["first line", "second line"])
         XCTAssertEqual(page.sortedTextBlocks.map(\.readingOrder), [0, 1])
         XCTAssertEqual(recognizer.callCount, 1)
+        XCTAssertNil(page.markdown)
+        XCTAssertEqual(page.displayText, page.recognizedText)
+    }
+
+    @MainActor
+    func testReconstructedMarkdownIsShownWhileVisionKeepsTheTextLayer() async throws {
+        let context = try makeContext()
+        let storage = FileStorageService(rootDirectory: root)
+        let service = DocumentProcessingService(
+            modelContext: context,
+            storage: storage,
+            pipeline: OCRPipeline(recognizer: MockTextRecognitionService(blocksToReturn: mockBlocks())),
+            reconstructor: StubReconstructor(markdown: "# First line\n\n$x^2$")
+        )
+
+        var reportedStages: [ImportStage] = []
+        let document = try await service.importImage(data: try sampleImageData(), type: .photo) { stage, _ in
+            reportedStages.append(stage)
+        }
+
+        let page = try XCTUnwrap(document.sortedPages.first)
+        XCTAssertEqual(page.markdown, "# First line\n\n$x^2$")
+        XCTAssertEqual(page.displayText, page.markdown)
+        XCTAssertEqual(page.recognizedText, "first line\nsecond line")
+        XCTAssertEqual(page.textBlocks.count, 2)
+        XCTAssertTrue(reportedStages.contains(.reconstructing))
+
+        let store = DocumentStore(modelContext: context, storage: storage)
+        try store.updateDisplayText("# Edited", on: page)
+        XCTAssertEqual(page.markdown, "# Edited")
+        XCTAssertEqual(page.recognizedText, "first line\nsecond line")
     }
 
     @MainActor
@@ -129,7 +169,8 @@ final class DocumentProcessingServiceTests: XCTestCase {
         let service = DocumentProcessingService(
             modelContext: context,
             storage: storage,
-            pipeline: OCRPipeline(recognizer: recognizer)
+            pipeline: OCRPipeline(recognizer: recognizer),
+            reconstructor: StubReconstructor()
         )
 
         do {
@@ -155,7 +196,8 @@ final class DocumentProcessingServiceTests: XCTestCase {
         let service = DocumentProcessingService(
             modelContext: context,
             storage: storage,
-            pipeline: OCRPipeline(recognizer: recognizer)
+            pipeline: OCRPipeline(recognizer: recognizer),
+            reconstructor: StubReconstructor()
         )
 
         let document = try await service.importImage(data: try sampleImageData(), type: .photo)
@@ -188,7 +230,8 @@ final class DocumentProcessingServiceTests: XCTestCase {
         let service = DocumentProcessingService(
             modelContext: context,
             storage: storage,
-            pipeline: OCRPipeline(recognizer: recognizer)
+            pipeline: OCRPipeline(recognizer: recognizer),
+            reconstructor: StubReconstructor()
         )
 
         let (pdfData, _) = try DemoContentRenderer.renderPDF(pages: [
@@ -227,7 +270,8 @@ final class DocumentProcessingServiceTests: XCTestCase {
         let service = DocumentProcessingService(
             modelContext: context,
             storage: storage,
-            pipeline: OCRPipeline(recognizer: MockTextRecognitionService())
+            pipeline: OCRPipeline(recognizer: MockTextRecognitionService()),
+            reconstructor: StubReconstructor()
         )
 
         let brokenURL = FileManager.default.temporaryDirectory

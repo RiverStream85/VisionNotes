@@ -149,8 +149,8 @@ struct ImageReaderView: View {
 
             ScrollView {
                 if let page {
-                    if !page.recognizedText.isEmpty {
-                        HighlightedBodyText(text: page.recognizedText, terms: highlightTerms, font: .callout)
+                    if !page.displayText.isEmpty {
+                        HighlightedBodyText(text: page.displayText, terms: highlightTerms, font: .callout)
                     } else {
                         Text(document.processingStatus == .processing
                              ? "Recognizing text…"

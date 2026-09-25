@@ -193,7 +193,7 @@ final class DocumentStoreTests: XCTestCase {
         let document = try makeDocument(in: context, storage: storage, title: "Notes", pageTexts: ["before"])
         guard let page = document.sortedPages.first else { return XCTFail("Expected one page") }
 
-        try store.updateRecognizedText("corrected by hand", on: page)
+        try store.updateDisplayText("corrected by hand", on: page)
 
         let results = SearchEngine().search(query: "corrected", in: try store.searchSnapshots())
         XCTAssertEqual(results.count, 1)

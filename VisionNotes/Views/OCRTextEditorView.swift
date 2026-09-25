@@ -1,7 +1,7 @@
 import SwiftData
 import SwiftUI
 
-/// Edit the recognized text of one page.
+/// Edit the text the reader shows for one page (the Markdown when there is one).
 ///
 /// Saving updates the page immediately, so search reflects manual corrections
 /// right away. Re-running OCR always asks first, because it discards edits.
@@ -114,7 +114,7 @@ struct OCRTextEditorView: View {
     // MARK: - Actions
 
     private func load() async {
-        text = page.recognizedText
+        text = page.displayText
         isTextAvailable = true
         guard let fileName = page.imageFileName else { return }
         let directory = PageImageLocator.directory(for: document.documentType)
@@ -128,7 +128,7 @@ struct OCRTextEditorView: View {
 
     private func save() {
         do {
-            try DocumentStore(modelContext: modelContext).updateRecognizedText(text, on: page)
+            try DocumentStore(modelContext: modelContext).updateDisplayText(text, on: page)
             dismiss()
         } catch {
             errorAlert = ErrorAlert(error)
@@ -141,7 +141,7 @@ struct OCRTextEditorView: View {
         do {
             let service = DocumentProcessingService(modelContext: modelContext)
             let recognized = try await service.reprocessPage(page)
-            text = recognized.text
+            text = page.displayText
             if recognized.blocks.isEmpty {
                 errorAlert = ErrorAlert(AppError.noTextRecognized)
             }

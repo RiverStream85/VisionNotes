@@ -56,7 +56,7 @@ struct DocumentStore {
                     SearchPageSnapshot(
                         id: page.id,
                         pageNumber: page.pageNumber,
-                        text: page.recognizedText
+                        text: page.displayText
                     )
                 }
             )
@@ -73,8 +73,14 @@ struct DocumentStore {
         try save()
     }
 
-    func updateRecognizedText(_ text: String, on page: DocumentPage) throws {
-        page.recognizedText = text
+    /// Saves an edit to what the reader shows: the Markdown when the page has
+    /// it, otherwise the Vision text.
+    func updateDisplayText(_ text: String, on page: DocumentPage) throws {
+        if page.markdown != nil {
+            page.markdown = text
+        } else {
+            page.recognizedText = text
+        }
         page.document?.updatedAt = Date()
         try save()
     }

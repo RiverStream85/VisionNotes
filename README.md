@@ -4,6 +4,12 @@ Vision Notes scans, recognizes, searches and exports notes on iOS. Ordinary Libr
 
 **Validation status:** the app has built and run on iPhone 17 Pro. Mac Metal numerical comparison passes all 18 float32/float16/bfloat16 and cache-boundary cases. The September 23 debugging session found and corrected a multimodal-input bug that dropped the actual image, plus a batched-prompt incompatibility in presence-penalty processing. The 24 Academic simulator tests and 4 UI tests pass in focused reruns, including real WebKit PDF export, encrypted persistence, cloud-consent boundaries, OCR editing, import and search. Full physical-device acceptance after these fixes, offline restart, handwriting accuracy, latency and peak memory still require validation. Do not claim a measured speedup or production-grade transcription accuracy.
 
+## Repository layout
+
+`VisionNotes/`, `FirebirdRuntime/` and the test targets are the Vision Notes app and its local MLX runtime.
+`DeepSeekOCR/` is a separate llama.cpp proof of concept that runs DeepSeek-OCR-2 (3B MoE, GGUF) on iPhone; it has its own XcodeGen project, bootstrap script, math fixture and 28-check verifier (see its README).
+Its fixture and verifier serve as the shared benchmark when comparing the two local OCR runtimes.
+
 ## Features
 
 - Camera scanning, photo/PDF import and on-device English/Chinese OCR.

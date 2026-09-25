@@ -1,0 +1,57 @@
+name: DeepSeekOCR
+
+options:
+  bundleIdPrefix: com.visionnotes
+  deploymentTarget:
+    iOS: "17.0"
+  xcodeVersion: "26.0"
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    CODE_SIGN_STYLE: Automatic
+    CURRENT_PROJECT_VERSION: 1
+    MARKETING_VERSION: 0.1.0
+    SWIFT_VERSION: 6.0
+    IPHONEOS_DEPLOYMENT_TARGET: 17.0
+    TARGETED_DEVICE_FAMILY: "1,2"
+
+targets:
+  DeepSeekOCR:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+      - path: Bridge
+      - path: Fixtures/math-ocr-test.png
+        buildPhase: resources
+      - path: ModelAssets
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - framework: Vendor/llama.xcframework
+        embed: true
+    settings:
+      base:
+        DEVELOPMENT_TEAM: 2CXBZGAL4X
+        PRODUCT_BUNDLE_IDENTIFIER: com.visionnotes.DeepSeekOCR
+        PRODUCT_NAME: DeepSeek OCR
+        PRODUCT_MODULE_NAME: DeepSeekOCR
+        TARGETED_DEVICE_FAMILY: "1,2"
+        INFOPLIST_KEY_CFBundleDisplayName: DeepSeek OCR
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.productivity
+        INFOPLIST_KEY_NSPhotoLibraryUsageDescription: Select a document image for fully local OCR.
+        INFOPLIST_KEY_UILaunchScreen_Generation: true
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: true
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: true
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+        GENERATE_INFOPLIST_FILE: true
+        SWIFT_OBJC_BRIDGING_HEADER: Bridge/DeepSeekOCR-Bridging-Header.h
+        CLANG_CXX_LANGUAGE_STANDARD: c++17
+        CLANG_ENABLE_MODULES: true
+        CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER: false
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"
+    scheme:
+      testTargets: []
+      gatherCoverageData: false

@@ -165,7 +165,7 @@ public actor FirebirdRuntime {
                 let sampler = GenerateParameters(temperature: decoding.temperature,
                     topP: decoding.topP, topK: decoding.topK).sampler()
                 let iterator = try TokenIterator(input: input, model: context.model,
-                    processor: decoding.penalty.map(GeneratedTokenPenalty.init), sampler: sampler,
+                    processor: FirebirdLogitProcessor(decoding), sampler: sampler,
                     prefillStepSize: 128, maxTokens: maxTokens)
                 let (stream, task) = generateTask(promptTokenCount: input.text.tokens.size,
                     modelConfiguration: context.configuration, tokenizer: context.tokenizer,
@@ -309,6 +309,41 @@ enum FirebirdMemory {
         let physical = Int(ProcessInfo.processInfo.physicalMemory)
         let recommended = Int(GPU.deviceInfo().maxRecommendedWorkingSetSize)
         return min(physical * 3 / 4, recommended > 0 ? recommended : physical)
+    }
+}
+
+/// Combines the decoding attempt's generated-only penalty and no-repeat rule.
+struct FirebirdLogitProcessor: LogitProcessor {
+    private var penalty: GeneratedTokenPenalty?
+    private let noRepeat: NoRepeatNGram?
+    private var history: [Int] = []
+
+    init?(_ decoding: FirebirdDecoding) {
+        guard decoding.penalty != nil || decoding.noRepeatNGram != nil else { return nil }
+        penalty = decoding.penalty.map(GeneratedTokenPenalty.init)
+        noRepeat = decoding.noRepeatNGram
+    }
+
+    mutating func prompt(_ prompt: MLXArray) {}
+
+    func process(logits: MLXArray) -> MLXArray {
+        var logits = penalty?.process(logits: logits) ?? logits
+        if let noRepeat {
+            let banned = noRepeat.bannedTokens(after: history)
+            if !banned.isEmpty {
+                logits[0..., MLXArray(banned.map { UInt32($0) })] = MLXArray(-Float.infinity)
+            }
+        }
+        return logits
+    }
+
+    mutating func didSample(token: MLXArray) {
+        penalty?.didSample(token: token)
+        guard let noRepeat else { return }
+        // Reading the token waits for this step on the GPU; the evaluation
+        // harness measures that cost against plain greedy decoding.
+        history.append(token.item(Int.self))
+        if history.count > noRepeat.window { history.removeFirst(history.count - noRepeat.window) }
     }
 }
 

@@ -69,7 +69,7 @@ final class ReconstructionTests: XCTestCase {
 /// so accuracy and speed of the fused kernel are compared on identical input:
 ///
 ///     {"modelPath": "...", "outputPath": "...", "tierCeiling": "extended",
-///      "attention": ["mlx", "fusedExperimental"],
+///      "attention": ["mlx", "fusedExperimental"], "decoding": ["recipe", "greedy"],
 ///      "samples": [{"image": "page1.jpg", "reference": "page1.md"}]}
 ///
 /// Sample paths are relative to the config file. `reference` is optional.
@@ -80,6 +80,8 @@ extension ReconstructionTests {
         let outputPath: String
         let tierCeiling: String?
         let attention: [String]?
+        /// "recipe" (default) or "greedy" (no penalty, no no-repeat rule).
+        let decoding: [String]?
         let maxOutputTokens: Int?
         let samples: [Sample]
     }
@@ -87,6 +89,7 @@ extension ReconstructionTests {
     private struct SampleReport: Encodable {
         let image: String
         let attention: String
+        let decoding: String
         let completed: Bool
         let failure: String?
         let characterErrorRate: Double?
@@ -113,33 +116,46 @@ extension ReconstructionTests {
             try XCTUnwrap(FirebirdDeviceBudget.Tier(rawValue: $0), "Unknown tier \($0)")
         } ?? FirebirdDeviceBudget.defaultCeiling
 
+        let baseRecipe = FirebirdRecipe.academicTranscription
+        let recipes = try (config.decoding ?? ["recipe"]).map { name -> (String, FirebirdRecipe) in
+            switch name {
+            case "recipe": return (name, baseRecipe)
+            case "greedy": return (name, FirebirdRecipe(version: baseRecipe.version + "-greedy",
+                                                        prompt: baseRecipe.prompt, attempts: [.greedy]))
+            default: throw XCTSkip("Unknown decoding variant \(name)")
+            }
+        }
+
         var reports: [SampleReport] = []
         for mode in modes {
             let runtime = FirebirdRuntime()
             try await runtime.load(directory: URL(fileURLWithPath: config.modelPath),
                 options: FirebirdRuntimeOptions(decodeAttention: mode, tierCeiling: ceiling,
                                                 maxOutputTokens: config.maxOutputTokens))
-            for sample in config.samples {
-                let imageURL = base.appendingPathComponent(sample.image)
-                let stem = imageURL.deletingPathExtension().lastPathComponent + "-" + mode.rawValue
-                let reference = try sample.reference.map {
-                    try String(contentsOf: base.appendingPathComponent($0), encoding: .utf8)
+            for (variant, recipe) in recipes {
+                for sample in config.samples {
+                    let imageURL = base.appendingPathComponent(sample.image)
+                    let stem = imageURL.deletingPathExtension().lastPathComponent + "-" + mode.rawValue + "-" + variant
+                    let reference = try sample.reference.map {
+                        try String(contentsOf: base.appendingPathComponent($0), encoding: .utf8)
+                    }
+                    var output = ""
+                    var report: SampleReport
+                    do {
+                        let result = try await runtime.reconstruct(imageData: Data(contentsOf: imageURL), recipe: recipe)
+                        output = result.markdown
+                        report = SampleReport(image: sample.image, attention: mode.rawValue, decoding: variant,
+                            completed: true, failure: nil,
+                            characterErrorRate: reference.map { TranscriptionMetrics.characterErrorRate(prediction: output, reference: $0) },
+                            metrics: result.metrics)
+                    } catch FirebirdRuntimeError.incomplete(let reason, let partial) {
+                        output = partial
+                        report = SampleReport(image: sample.image, attention: mode.rawValue, decoding: variant, completed: false,
+                            failure: reason.rawValue, characterErrorRate: nil, metrics: nil)
+                    }
+                    try output.write(to: destination.appendingPathComponent(stem + ".md"), atomically: true, encoding: .utf8)
+                    reports.append(report)
                 }
-                var output = ""
-                var report: SampleReport
-                do {
-                    let result = try await runtime.reconstruct(imageData: Data(contentsOf: imageURL))
-                    output = result.markdown
-                    report = SampleReport(image: sample.image, attention: mode.rawValue, completed: true, failure: nil,
-                        characterErrorRate: reference.map { TranscriptionMetrics.characterErrorRate(prediction: output, reference: $0) },
-                        metrics: result.metrics)
-                } catch FirebirdRuntimeError.incomplete(let reason, let partial) {
-                    output = partial
-                    report = SampleReport(image: sample.image, attention: mode.rawValue, completed: false,
-                        failure: reason.rawValue, characterErrorRate: nil, metrics: nil)
-                }
-                try output.write(to: destination.appendingPathComponent(stem + ".md"), atomically: true, encoding: .utf8)
-                reports.append(report)
             }
         }
         let encoder = JSONEncoder()

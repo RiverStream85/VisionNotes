@@ -14,15 +14,50 @@ public struct FirebirdPenalty: Codable, Equatable, Sendable {
     }
 }
 
+/// DeepSeek-OCR's reference no-repeat rule: a token is banned when it would
+/// repeat an n-gram that already occurs in the recent generated window. Unlike
+/// a penalty, it leaves short legitimate repetition (braces, matrix cells,
+/// table rules) untouched and only blocks long verbatim cycles.
+public struct NoRepeatNGram: Codable, Equatable, Sendable {
+    public let size: Int
+    public let window: Int
+
+    public init(size: Int, window: Int) {
+        precondition(size >= 2 && window >= size)
+        self.size = size; self.window = window
+    }
+
+    public static let reference = NoRepeatNGram(size: 20, window: 90)
+
+    /// Tokens that would complete an n-gram already present in `history`,
+    /// searching only the last `window` generated tokens.
+    public func bannedTokens(after history: [Int]) -> [Int] {
+        guard history.count >= size else { return [] }
+        let prefixStart = history.count - (size - 1)
+        let searchStart = max(0, history.count - window)
+        let searchEnd = history.count - size + 1
+        guard searchStart < searchEnd else { return [] }
+        var banned: [Int] = []
+        for start in searchStart..<searchEnd
+        where history[start..<(start + size - 1)].elementsEqual(history[prefixStart...]) {
+            banned.append(history[start + size - 1])
+        }
+        return banned
+    }
+}
+
 /// One decoding attempt. Temperature 0 selects greedy (arg-max) decoding.
 public struct FirebirdDecoding: Codable, Equatable, Sendable {
     public let temperature: Float
     public let topP: Float
     public let topK: Int
     public let penalty: FirebirdPenalty?
+    public let noRepeatNGram: NoRepeatNGram?
 
-    public init(temperature: Float = 0, topP: Float = 1, topK: Int = 0, penalty: FirebirdPenalty? = nil) {
-        self.temperature = temperature; self.topP = topP; self.topK = topK; self.penalty = penalty
+    public init(temperature: Float = 0, topP: Float = 1, topK: Int = 0,
+                penalty: FirebirdPenalty? = nil, noRepeatNGram: NoRepeatNGram? = nil) {
+        self.temperature = temperature; self.topP = topP; self.topK = topK
+        self.penalty = penalty; self.noRepeatNGram = noRepeatNGram
     }
 
     public static let greedy = FirebirdDecoding()
@@ -42,8 +77,9 @@ public struct FirebirdRecipe: Codable, Equatable, Sendable {
     }
 
     /// Greedy first, so identical input gives identical output and can be
-    /// regression-tested. The fallback breaks a degenerate loop with a mild,
-    /// generated-only repetition penalty instead of random sampling.
+    /// regression-tested. The reference no-repeat rule blocks long verbatim
+    /// cycles as they form; the fallback adds a mild, generated-only
+    /// repetition penalty for shorter loops instead of random sampling.
     public static let academicTranscription = FirebirdRecipe(
         version: "recipe-3",
         prompt: """
@@ -53,8 +89,9 @@ public struct FirebirdRecipe: Codable, Equatable, Sendable {
             Mark genuinely unreadable content [unclear: description]. Return only the document, without a code fence.
             """,
         attempts: [
-            .greedy,
-            FirebirdDecoding(penalty: FirebirdPenalty(kind: .repetition, value: 1.1, window: 64))
+            FirebirdDecoding(noRepeatNGram: .reference),
+            FirebirdDecoding(penalty: FirebirdPenalty(kind: .repetition, value: 1.1, window: 64),
+                             noRepeatNGram: .reference)
         ])
 }
 

@@ -85,10 +85,11 @@ final class FirebirdDeviceBudgetTests: XCTestCase {
 }
 
 final class FirebirdRecipeTests: XCTestCase {
-    func testDefaultRecipeIsDeterministicFirst() {
+    func testDefaultRecipeIsDeterministic() {
         let recipe = FirebirdRecipe.academicTranscription
-        XCTAssertEqual(recipe.attempts.first, .greedy)
         XCTAssertTrue(recipe.attempts.allSatisfy { $0.temperature == 0 })
+        XCTAssertEqual(recipe.attempts.first?.penalty, nil)
+        XCTAssertEqual(recipe.attempts.first?.noRepeatNGram, .reference)
     }
 
     func testIdentityDerivesCheckpointPath() {
@@ -108,5 +109,33 @@ final class TranscriptionMetricsTests: XCTestCase {
         XCTAssertEqual(TranscriptionMetrics.editDistance("kitten", "sitting"), 3)
         XCTAssertEqual(TranscriptionMetrics.editDistance("", "abc"), 3)
         XCTAssertEqual(TranscriptionMetrics.characterErrorRate(prediction: "x_1", reference: "x_2"), 1.0 / 3.0, accuracy: 1e-9)
+    }
+}
+
+final class NoRepeatNGramTests: XCTestCase {
+    private let rule = NoRepeatNGram(size: 3, window: 10)
+
+    func testBansTokenThatWouldRepeatAnNGram() {
+        // "1 2 3 ... 1 2" — emitting 3 would repeat the trigram 1 2 3.
+        XCTAssertEqual(rule.bannedTokens(after: [1, 2, 3, 9, 1, 2]), [3])
+    }
+
+    func testAllowsWhenNoPrefixMatch() {
+        XCTAssertEqual(rule.bannedTokens(after: [1, 2, 3, 4, 5]), [])
+        XCTAssertEqual(rule.bannedTokens(after: [1, 2]), [])
+    }
+
+    func testOnlySearchesRecentWindow() {
+        let old = [1, 2, 3] + Array(repeating: 7, count: 0) + (10...17).map { $0 }
+        // The 1 2 3 trigram fell out of the 10-token window.
+        XCTAssertEqual(rule.bannedTokens(after: old + [1, 2]), [])
+    }
+
+    func testReferenceMatchesDeepSeekParameters() {
+        XCTAssertEqual(NoRepeatNGram.reference, NoRepeatNGram(size: 20, window: 90))
+        let cycle = Array(0..<25)
+        // A second pass through a 25-token cycle is blocked at its 20th token.
+        let history = cycle + Array(cycle.prefix(19))
+        XCTAssertEqual(NoRepeatNGram.reference.bannedTokens(after: history), [19])
     }
 }

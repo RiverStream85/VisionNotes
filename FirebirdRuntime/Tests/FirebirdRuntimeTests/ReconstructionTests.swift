@@ -50,6 +50,25 @@ final class ReconstructionTests: XCTestCase {
         }
     }
 
+    func testResumablePrefixKeepsWholeLines() {
+        XCTAssertEqual(FirebirdRuntime.resumablePrefix("# Title\n\nFirst par"), "# Title\n\n")
+        XCTAssertEqual(FirebirdRuntime.resumablePrefix("no line break yet"), "")
+    }
+
+    func testSeededNoRepeatBansMatchAppendedHistory() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("Metal GPU required") }
+        let rule = NoRepeatNGram(size: 3, window: 8)
+        let tokens: [Int32] = [1, 2, 3, 4, 1, 2, 5, 6, 7, 1, 2]
+        var appended = NoRepeatNGramBans(rule)
+        for token in tokens { appended.append(MLXArray([token])) }
+        var seeded = NoRepeatNGramBans(rule)
+        seeded.seed(MLXArray(tokens), count: tokens.count)
+        let expected = appended.apply(to: MLXArray.zeros([1, 8]))
+        let output = seeded.apply(to: MLXArray.zeros([1, 8]))
+        eval(expected, output)
+        XCTAssertEqual(output.asArray(Float.self), expected.asArray(Float.self))
+    }
+
     func testProcessorConfigurationCapsPixels() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -131,7 +150,7 @@ extension ReconstructionTests {
         return FirebirdRecipe(version: base.version + "-" + variant.name, prompt: prompt, attempts: attempts)
     }
 
-    func testLocalEvaluation() async throws {
+    private func evaluationConfig() throws -> (EvaluationConfig, base: URL) {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("Metal GPU required") }
         let repository = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
@@ -141,7 +160,33 @@ extension ReconstructionTests {
             throw XCTSkip("Optional local evaluation not configured")
         }
         let config = try JSONDecoder().decode(EvaluationConfig.self, from: Data(contentsOf: configURL))
-        let base = configURL.deletingLastPathComponent()
+        return (config, configURL.deletingLastPathComponent())
+    }
+
+    /// Interrupts every evaluation sample halfway (at a line break), resumes it,
+    /// and expects the uninterrupted greedy transcription back. Uses the
+    /// evaluation config's model and samples.
+    func testResumeMatchesUninterruptedGeneration() async throws {
+        let (config, base) = try evaluationConfig()
+        let runtime = FirebirdRuntime()
+        try await runtime.load(directory: URL(fileURLWithPath: config.modelPath))
+        for sample in config.samples {
+            let image = try Data(contentsOf: base.appendingPathComponent(sample.image))
+            let full = try await runtime.reconstruct(imageData: image).markdown
+            let half = String(full.prefix(full.count / 2))
+            let partial = FirebirdRuntime.resumablePrefix(half)
+            XCTAssertFalse(partial.isEmpty, "\(sample.image): no line break in the first half")
+            let resumed = try await runtime.reconstruct(imageData: image, resumingFrom: half)
+            XCTAssertTrue(resumed.markdown.hasPrefix(partial.trimmingCharacters(in: .whitespacesAndNewlines)))
+            let rate = TranscriptionMetrics.characterErrorRate(prediction: resumed.markdown, reference: full)
+            print("resume \(sample.image): resumed after \(partial.count) of \(full.count) characters, "
+                + "\(resumed.metrics.promptTokens) prompt tokens, CER vs uninterrupted \(rate)")
+            XCTAssertEqual(resumed.markdown, full, "\(sample.image): resumed output differs")
+        }
+    }
+
+    func testLocalEvaluation() async throws {
+        let (config, base) = try evaluationConfig()
         let destination = URL(fileURLWithPath: config.outputPath)
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
 
@@ -181,6 +226,9 @@ extension ReconstructionTests {
                     output = partial
                     report = SampleReport(image: sample.image, variant: variant.name, completed: false,
                         failure: reason.rawValue, characterErrorRate: nil, metrics: nil)
+                } catch {
+                    report = SampleReport(image: sample.image, variant: variant.name, completed: false,
+                        failure: "\(error)", characterErrorRate: nil, metrics: nil)
                 }
                 try output.write(to: destination.appendingPathComponent(stem + ".md"), atomically: true, encoding: .utf8)
                 reports.append(report)

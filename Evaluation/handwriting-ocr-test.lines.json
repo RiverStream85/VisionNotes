@@ -1,0 +1,110 @@
+[
+  {
+    "box" : [
+      0.2261,
+      0.0898,
+      0.5768,
+      0.1219
+    ],
+    "text" : "Physics review, Sept 24"
+  },
+  {
+    "box" : [
+      0.136,
+      0.1924,
+      0.7134,
+      0.2271
+    ],
+    "text" : "Kinematics with constant acceleration:"
+  },
+  {
+    "box" : [
+      0.1403,
+      0.244,
+      0.3188,
+      0.279
+    ],
+    "text" : "v = v_0 + at"
+  },
+  {
+    "box" : [
+      0.1381,
+      0.2784,
+      0.4611,
+      0.3464
+    ],
+    "text" : "x = x_0 + v_0t + (1)\/(2) at^2"
+  },
+  {
+    "box" : [
+      0.1381,
+      0.3408,
+      0.4403,
+      0.3836
+    ],
+    "text" : "v^2 = v_0^2 + 2a(x - x_0)"
+  },
+  {
+    "box" : [
+      0.1335,
+      0.4521,
+      0.8519,
+      0.4885
+    ],
+    "text" : "Example: a ball is thrown straight up at 12 m\/s."
+  },
+  {
+    "box" : [
+      0.1346,
+      0.5037,
+      0.4342,
+      0.5367
+    ],
+    "text" : "How high does it go?"
+  },
+  {
+    "box" : [
+      0.1332,
+      0.5312,
+      0.8279,
+      0.6092
+    ],
+    "text" : "At the top v = 0, so h = (v_0^2)\/(2g) = (144)\/(19.6) ≈ 7.3 m."
+  },
+  {
+    "box" : [
+      0.1328,
+      0.602,
+      0.8707,
+      0.6449
+    ],
+    "text" : "Remember: the acceleration is -9.8 m\/s^2 the whole"
+  },
+  {
+    "box" : [
+      0.1267,
+      0.6597,
+      0.4374,
+      0.6929
+    ],
+    "text" : "time, even at the top."
+  },
+  {
+    "box" : [
+      0.1256,
+      0.6943,
+      0.8863,
+      0.7645
+    ],
+    "text" : "Energy check: (1)\/(2) m v_0^2 = m g h, the mass cancels."
+  },
+  {
+    "box" : [
+      0.1285,
+      0.8158,
+      0.7828,
+      0.8524
+    ],
+    "text" : "To do: problems 3, 7 and 12 from chapter 2."
+  }
+]

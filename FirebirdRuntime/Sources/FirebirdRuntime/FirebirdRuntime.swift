@@ -326,7 +326,9 @@ public actor FirebirdRuntime {
             switch info.stopReason {
             case .stop: return .completed(text, info, firstText: firstText)
             case .length: return .outputLimit(text)
-            case .cancelled: throw FirebirdRuntimeError.incompleteGeneration
+            // `generateTask` iterates a copy of the token iterator, so reaching
+            // `maxTokens` is reported as cancelled. Only this task cancels.
+            case .cancelled: return .outputLimit(text)
             }
         } onCancel: {
             task.cancel()

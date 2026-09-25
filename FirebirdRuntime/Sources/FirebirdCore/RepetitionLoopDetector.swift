@@ -17,7 +17,7 @@ public struct RepetitionLoopDetector: Sendable {
     /// Short legitimate repetition (a zero matrix, a table rule) stays below this.
     public let minimumRepeatedCharacters: Int
 
-    public init(minimumPeriod: Int = 2, maximumPeriod: Int = 256,
+    public init(minimumPeriod: Int = 2, maximumPeriod: Int = 1024,
                 minimumRepeats: Int = 4, minimumRepeatedCharacters: Int = 240) {
         precondition(minimumPeriod > 0 && maximumPeriod >= minimumPeriod && minimumRepeats >= 2)
         self.minimumPeriod = minimumPeriod; self.maximumPeriod = maximumPeriod

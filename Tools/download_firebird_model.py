@@ -10,11 +10,11 @@ import urllib.request
 
 # Pinned checkpoints: lock file and default development cache.
 MODELS = {
-    'qwen3-vl': ('FirebirdModel.lock.json', 'work/FirebirdModel'),
-    'paddleocr-vl': ('PaddleOCRVLModel.lock.json', 'work/PaddleOCRVLModel'),
+    'qwen3-vl': ('QwenVLModel.lock.json', 'work/QwenVLModel'),
+    'paddleocr-vl': ('FirebirdModel.lock.json', 'work/FirebirdModel'),
 }
 parser = argparse.ArgumentParser()
-parser.add_argument('--model', choices=MODELS, default='qwen3-vl')
+parser.add_argument('--model', choices=MODELS, default='paddleocr-vl')
 parser.add_argument('--output', type=Path)
 args = parser.parse_args()
 lock_name, default_output = MODELS[args.model]

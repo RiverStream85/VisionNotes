@@ -1,46 +1,36 @@
 {
-  "model": "mlx-community/Qwen3-VL-2B-Instruct-4bit",
-  "revision": "9c4f5209e57b31f4b9dfba735de3fb983739c9cc",
+  "model": "mlx-community/PaddleOCR-VL-1.5-4bit",
+  "revision": "3404726b40ac30b6e4e3d37c504e3f96c9c6c984",
   "assets": [
     {
       "name": "config.json",
-      "bytes": 7137,
-      "sha256": "6e992843f82cbaf02e8eae2f1c803f8a56f70951fa8a1f30fc1bf8d9ec2d7ec3"
+      "bytes": 2483,
+      "sha256": "e17df4c3cf9ddad33a8449d65d0da911b4187d4ba565a421e4faecc8d1e488c7"
     },
     {
       "name": "tokenizer.json",
-      "bytes": 11422654,
-      "sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"
+      "bytes": 11189060,
+      "sha256": "c8a215a59183d0d0781adc33bacd3ce6162716f7fd568fb30234a74d69803a7d"
     },
     {
       "name": "tokenizer_config.json",
-      "bytes": 5445,
-      "sha256": "81ec7bb9530159b326c0bef1d0b6c33d392090524014ea3f0123a3c1eb9c2af5"
+      "bytes": 876,
+      "sha256": "dbdaa32276c60eb38b7986ba7c63fa5b66def3a06141ff2184ea9923dacea436"
     },
     {
       "name": "preprocessor_config.json",
-      "bytes": 782,
-      "sha256": "93585062a80db5e8ca038efc7726a3e6411d9db948472d81d63c6303993be8c5"
-    },
-    {
-      "name": "chat_template.json",
-      "bytes": 5502,
-      "sha256": "6f8a6a55027e3da5160105556cda5dd69f6423f1c32645f6730d32de7773d0c4"
-    },
-    {
-      "name": "special_tokens_map.json",
-      "bytes": 613,
-      "sha256": "76862e765266b85aa9459767e33cbaf13970f327a0e88d1c65846c2ddd3a1ecd"
+      "bytes": 641,
+      "sha256": "111872ab1e8bb7fd040ac5087bfced7ab8f011f02139b088cba294964c3b1d0e"
     },
     {
       "name": "generation_config.json",
-      "bytes": 269,
-      "sha256": "1e241830b48b397cb0900101421df5450baddc7adf01e5fc86b5615865f3bae4"
+      "bytes": 133,
+      "sha256": "a6701d78ab3b4d972307cdec3b69d4c13f46e0d5140514f50ab7d84259324b94"
     },
     {
       "name": "model.safetensors",
-      "bytes": 1782040921,
-      "sha256": "4750d95a2162829e127a94e83ac350d498d02070aab216c4687da48804a06ffb"
+      "bytes": 703562711,
+      "sha256": "f9a45393e2ffe6cbb412c25c82704fbb081e952c4c4517fa01e8a750010d1267"
     }
   ]
 }

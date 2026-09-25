@@ -27,7 +27,7 @@ public struct NoRepeatNGram: Codable, Equatable, Sendable {
         self.size = size; self.window = window
     }
 
-    public static let reference = NoRepeatNGram(size: 20, window: 90)
+    public static let reference = NoRepeatNGram(size: 20, window: 1024)
 
     /// Tokens that would complete an n-gram already present in `history`,
     /// searching only the last `window` generated tokens.

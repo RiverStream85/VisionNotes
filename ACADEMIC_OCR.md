@@ -1,6 +1,6 @@
 # Academic implementation
 
-Scan/import, source editing, comparison and the existing Academic exports remain unchanged. Firebird is the local runtime module, using the pinned Apache-2.0 Qwen3-VL-2B-Instruct 4-bit checkpoint; it is not a separately trained model.
+Scan/import, source editing, comparison and the existing Academic exports remain unchanged. Firebird is the local runtime module, using the pinned Apache-2.0 PaddleOCR-VL-1.5 4-bit checkpoint (Qwen3-VL-2B-Instruct until 2026-09-25); it is not a separately trained model.
 
 ## Request path
 

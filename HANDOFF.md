@@ -14,8 +14,9 @@ Other OCR experiments are archived outside the repo: `~/data/system-relocation/s
 ## What the app does now
 
 - Library / Import tabs: Apple Vision OCR (`TextRecognitionService`) supplies the text layer (word boxes, `DocumentPage.recognizedText`); Firebird then reconstructs the visible content as Markdown + LaTeX (`DocumentPage.markdown`, via `PageReconstructing` in `Services/PageReconstructor.swift`). Readers, the editor and search use `DocumentPage.displayText` (Markdown when present, else Vision text). Firebird runs only if the model is already present (bundled or downloaded from the Academic tab) and only while the app is active (`ForegroundGPUWork`: cancelled on resign-active, restarted on return). If it fails, is busy with an Academic job, or is unavailable, the page keeps its Vision text; "Run OCR Again" retries.
-- Academic tab: Firebird, the local Qwen3-VL-2B-Instruct 4-bit runtime (`FirebirdRuntime/`, MLX), producing Markdown + LaTeX and the existing PDF/HTML/LaTeX/ZIP exports.
-- Recipe `recipe-4` (`FirebirdRuntime/Sources/FirebirdCore/FirebirdRecipe.swift`): prompt `qwenvl markdown` (Qwen3-VL's trained document-parsing prompt), greedy decoding, DeepSeek's no-repeat 20-gram rule on the GPU, one retry with a generated-only repetition penalty.
+- Academic tab: Firebird, the local PaddleOCR-VL-1.5 4-bit runtime (Qwen3-VL-2B until 2026-09-25; it looped on a dense paper page and dropped paragraphs) (`FirebirdRuntime/`, MLX), producing Markdown + LaTeX and the existing PDF/HTML/LaTeX/ZIP exports.
+- Recipe `paddle-text-1` (`FirebirdRuntime/Sources/FirebirdCore/FirebirdRecipe.swift`): prompt `OCR:`, greedy decoding, DeepSeek's no-repeat 20-gram rule on the GPU over the last 1,024 tokens. The Qwen recipe `recipe-4` remains for comparisons (`QwenVLModel.lock.json`, benchmark `VN_BENCHMARK_MODEL=qwen`).
+- MLX's `generateTask` reports a run that reaches `maxTokens` as cancelled (it iterates a copy of the token iterator); the runtime treats that as the output limit so the partial page is kept as a draft.
 - Resolution and context come from available process memory (`FirebirdDeviceBudget`); default ceiling is the 1,048,576-pixel tier.
 - Decode attention uses MLX SDPA; the authored Metal kernel is opt-in (`FirebirdDecodeAttention.fusedExperimental`) and was 42% slower on an M4.
 - Model files are public and not encrypted. A development build bundles them (build phase "Bundle Firebird model" copies `work/FirebirdModel`); otherwise the Academic tab downloads them through a background URLSession with its own progress section, and they load in place.
@@ -61,7 +62,7 @@ Handwriting and figures → Markdown are not good yet; the fixture is typeset, s
 ## Build and install on the phone
 
 1. `cd ~/data/project/VisionNotes && git pull`.
-2. Model for bundling: `work/FirebirdModel` (git-ignored). If missing, run `python3 Tools/download_firebird_model.py` or copy `~/Library/Caches/vn/FirebirdModel`.
+2. Model for bundling: `work/FirebirdModel` (git-ignored). If missing, run `python3 Tools/download_firebird_model.py` (PaddleOCR-VL) or copy `~/Library/Caches/vn/PaddleModel`.
 3. Open `VisionNotes.xcodeproj` in Xcode, scheme VisionNotes, destination iPhone 18 Pro Max (`kitp`, CoreDevice id `6F7BD7F6-37AD-5DC6-ABDC-0946531F569F`), Run.
 4. Signing team is `2CXBZGAL4X`; bundle id stays `com.visionnotes.VisionNotes` (owner's choice). The app requests `com.apple.developer.kernel.increased-memory-limit`.
 

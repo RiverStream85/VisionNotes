@@ -1,6 +1,6 @@
 # Vision Notes
 
-Vision Notes scans, recognizes, searches and exports notes on iOS. Ordinary Library OCR uses Apple Vision. Academic reconstruction now routes to **Firebird**, the application's local inference module using **Qwen3-VL-2B-Instruct, 4-bit**. Firebird is not a separately trained model. Mistral OCR and SiliconFlow's Qwen3-VL-32B remain optional cloud fallbacks after explicit confirmation.
+Vision Notes scans, recognizes, searches and exports notes on iOS. Ordinary Library OCR uses Apple Vision. Academic reconstruction now routes to **Firebird**, the application's local inference module using **PaddleOCR-VL-1.5, 4-bit** (it replaced Qwen3-VL-2B-Instruct on 2026-09-25; see Decoding). Firebird is not a separately trained model. Mistral OCR and SiliconFlow's Qwen3-VL-32B remain optional cloud fallbacks after explicit confirmation.
 
 **Validation status:** the app has built and run on iPhone 17 Pro. Mac Metal numerical comparison passes all 18 float32/float16/bfloat16 and cache-boundary cases. The September 23 debugging session found and corrected a multimodal-input bug that dropped the actual image, plus a batched-prompt incompatibility in presence-penalty processing. The 24 Academic simulator tests and 4 UI tests pass in focused reruns, including real WebKit PDF export, persistence, cloud-consent boundaries, OCR editing, import and search. Full physical-device acceptance after these fixes, offline restart, handwriting accuracy, latency and peak memory still require validation. Do not claim a measured speedup or production-grade transcription accuracy.
 
@@ -20,12 +20,12 @@ Vision Notes scans, recognizes, searches and exports notes on iOS. Ordinary Libr
 ## Local model setup and cold start
 
 A development build can bundle the model: put the pinned files in `work/FirebirdModel` (`python3 Tools/download_firebird_model.py`) and the "Bundle Firebird model" build phase copies them into the app, which then loads them in place.
-Otherwise the Academic tab's **On-device model** section downloads about **1.80 GB** from Hugging Face over Wi-Fi through a background URLSession, so the transfer continues while the screen is locked or the app is in the background.
+Otherwise the Academic tab's **On-device model** section downloads about **0.71 GB** from Hugging Face over Wi-Fi through a background URLSession, so the transfer continues while the screen is locked or the app is in the background.
 Only public model files are downloaded; no notes, images or OCR text are sent.
 `VisionNotes/Resources/FirebirdModel.lock.json` pins the model revision and file sizes (its SHA-256 values are used by the developer download tool).
 Downloaded files live unencrypted in `Application Support/VisionNotes/Models/<revision>`, excluded from backup, and load in place; the weights are public, so app-level encryption would protect nothing.
 
-The runtime uses the actual vision encoder, tokenizer, 28-layer language model, KV cache and autoregressive generation.
+The runtime uses the actual vision encoder, tokenizer, language model, KV cache and autoregressive generation.
 Image resolution and context length are chosen at load time from the memory the process may use (`os_proc_available_memory`), not from a device model name.
 `FirebirdCore/FirebirdDeviceBudget.swift` defines four tiers, from 393,216 pixels / 3,072 tokens up to 1,048,576 pixels / 6,144 tokens; the default ceiling is the highest tier, which on an M4 peaked at about 100 MiB more than the 786,432-pixel tier and transcribed the math fixture more accurately.
 A device that cannot hold the weights plus one page reports local inference unavailable instead of risking a memory termination.
@@ -33,15 +33,19 @@ The app requests `com.apple.developer.kernel.increased-memory-limit`, so the sig
 The per-pixel and fixed memory reserves in that file are uncalibrated estimates; replace them with peaks measured by the evaluation harness on each target device.
 Output that hits the generation limit, or keeps repeating after a retry, is treated as incomplete and kept as a draft, not saved as a successful transcription.
 
-Upstream model: [Qwen3-VL-2B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct). Pinned conversion: [mlx-community/Qwen3-VL-2B-Instruct-4bit](https://huggingface.co/mlx-community/Qwen3-VL-2B-Instruct-4bit/tree/9c4f5209e57b31f4b9dfba735de3fb983739c9cc), Apache-2.0. The model weights are downloaded, not committed to this repository.
+Pinned conversion: [mlx-community/PaddleOCR-VL-1.5-4bit](https://huggingface.co/mlx-community/PaddleOCR-VL-1.5-4bit/tree/3404726b40ac30b6e4e3d37c504e3f96c9c6c984), Apache-2.0. The former Qwen3-VL-2B-Instruct pin is kept in `VisionNotes/Resources/QwenVLModel.lock.json` (`python3 Tools/download_firebird_model.py --model qwen3-vl`) for comparisons. The model weights are downloaded, not committed to this repository.
 
 ## Decoding
+
+The app uses PaddleOCR-VL's plain OCR task (`FirebirdRecipe.paddleText`, prompt `OCR:`); `paddleSpotting` adds line boxes.
+Qwen3-VL-2B was replaced after a dense two-column paper page: it skipped the authors and a whole abstract paragraph, then repeated one section until the context ran out, while PaddleOCR-VL read the full page in 5.7 s on an M4.
+The notes below on `qwenvl markdown` apply to the retained Qwen recipe, `academicTranscription`.
 
 The prompt is Qwen3-VL's trained document-parsing instruction, `qwenvl markdown`; a long custom instruction made the model emit a whole LaTeX document and raised character error rate on the math fixture from 0.07 to 0.45.
 Pages are decoded greedily, so identical input yields identical output and can be regression-tested.
 No penalty is applied to prompt tokens: LaTeX legitimately repeats `\`, `{`, `}`, `_`, `^` and `$`, and the earlier presence penalty of 1.5 over prompt plus output suppressed exactly those tokens.
-DeepSeek-OCR's reference no-repeat rule (no repeated 20-gram within the last 90 generated tokens) runs as lazy MLX operations on the GPU, so it does not stall decoding.
-A repetition-loop detector stops a page whose tail repeats the same block, and the page is retried once with a mild repetition penalty over the last 64 generated tokens only.
+DeepSeek-OCR's reference no-repeat rule (no repeated 20-gram), widened from 90 to the last 1,024 generated tokens after that paper page looped with a period of about 150 tokens, runs as lazy MLX operations on the GPU, so it does not stall decoding.
+A repetition-loop detector stops a page whose tail repeats the same block (up to 1,024 characters per copy), and the page is retried once with a mild repetition penalty over the last 64 generated tokens only.
 The prompt and decoding attempts live in `FirebirdCore/FirebirdRecipe.swift`; its version is part of the checkpoint identifier, so changing the recipe re-runs pages instead of reusing stale results.
 The model identifier and checkpoint file names are derived from `FirebirdModel.lock.json` plus the recipe version.
 

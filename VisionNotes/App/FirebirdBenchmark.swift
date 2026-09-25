@@ -5,8 +5,8 @@ import Foundation
 /// Developer benchmark for measuring Firebird on a device. Copy images into
 /// Documents/Benchmark in the app container, then launch with VN_BENCHMARK=1
 /// (optionally VN_BENCHMARK_TIER=reduced|standard|extended|high, and
-/// VN_BENCHMARK_MODEL=paddle to load PaddleOCR-VL from Documents/PaddleModel
-/// with the line-box spotting recipe, or paddle-text for plain OCR):
+/// VN_BENCHMARK_MODEL=spotting for the app model's line-box recipe, or qwen to
+/// load Qwen3-VL from Documents/QwenModel with its Markdown recipe):
 ///
 ///     xcrun devicectl device process launch --console --device <id> \
 ///         --environment-variables '{"VN_BENCHMARK":"1"}' com.visionnotes.VisionNotes
@@ -35,9 +35,12 @@ enum FirebirdBenchmark {
         let recipe: FirebirdRecipe
         let modelDirectory: URL?
         switch environment["VN_BENCHMARK_MODEL"] {
-        case "paddle", "paddle-text":
-            recipe = environment["VN_BENCHMARK_MODEL"] == "paddle" ? .paddleSpotting : .paddleText
-            modelDirectory = folder.deletingLastPathComponent().appendingPathComponent("PaddleModel", isDirectory: true)
+        case "qwen":
+            recipe = .academicTranscription
+            modelDirectory = folder.deletingLastPathComponent().appendingPathComponent("QwenModel", isDirectory: true)
+        case "spotting":
+            recipe = .paddleSpotting
+            modelDirectory = FirebirdModelAssets.modelDirectory()
         default:
             recipe = FirebirdLocalModel.recipe
             modelDirectory = FirebirdModelAssets.modelDirectory()

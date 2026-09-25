@@ -14,6 +14,36 @@ final class RepetitionLoopDetectorTests: XCTestCase {
         XCTAssertNotNil(detector.period(in: "Intro\n" + String(repeating: line, count: 12)))
     }
 
+    func testDetectsRepeatedSection() {
+        // A dense paper page looped over two headings, a paragraph and three
+        // figure placeholders, about 620 characters per copy.
+        let section = """
+            ## 1. Objective
+
+            1. Detect latent market regimes using HMMs.
+            2. Map regimes to interpretable rotation rules.
+            3. Extend to RL via Markov decision process.
+            4. Evaluate against benchmarks (EW, SPY).
+
+            ## 2. Data Preparation
+
+            Daily closing prices for SPY, TLT, GLD and VIX are obtained from Yahoo Finance. Log-returns are used due to desirable aggregation properties (Campbell et al., Cont).
+
+            <!-- Image of Figure 1: Daily Log Returns of SPY, TLT, and GLD -->
+
+            <!-- Image of Figure 2: Rolling 30-Day Volatility of SPY, TLT, and GLD -->
+
+            <!-- Image of Figure 3: Static Correlation Matrix of ETF Log Returns -->
+
+
+            """
+        let text = "# Regime-Based Portfolio Allocation\n\n" + String(repeating: section, count: 4)
+        XCTAssertEqual(detector.period(in: text), section.unicodeScalars.count)
+        let trimmed = detector.trimmingLoop(text)
+        XCTAssertEqual(trimmed.components(separatedBy: "## 1. Objective").count, 2)
+        XCTAssertTrue(trimmed.contains("Figure 3: Static Correlation Matrix"))
+    }
+
     func testIgnoresShortLegitimateRepetition() {
         let zeroMatrix = "$$\\begin{pmatrix}" + String(repeating: "0 & 0 & 0 \\\\ ", count: 6) + "\\end{pmatrix}$$"
         XCTAssertNil(detector.period(in: zeroMatrix))
@@ -132,7 +162,7 @@ final class NoRepeatNGramTests: XCTestCase {
     }
 
     func testReferenceMatchesDeepSeekParameters() {
-        XCTAssertEqual(NoRepeatNGram.reference, NoRepeatNGram(size: 20, window: 90))
+        XCTAssertEqual(NoRepeatNGram.reference, NoRepeatNGram(size: 20, window: 1024))
         let cycle = Array(0..<25)
         // A second pass through a 25-token cycle is blocked at its 20th token.
         let history = cycle + Array(cycle.prefix(19))

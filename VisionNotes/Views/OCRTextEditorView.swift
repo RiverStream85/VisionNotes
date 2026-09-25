@@ -114,13 +114,8 @@ struct OCRTextEditorView: View {
     // MARK: - Actions
 
     private func load() async {
-        do {
-            text = try page.decryptedRecognizedText()
-            isTextAvailable = true
-        } catch {
-            isTextAvailable = false
-            errorAlert = ErrorAlert(error)
-        }
+        text = page.recognizedText
+        isTextAvailable = true
         guard let fileName = page.imageFileName else { return }
         let directory = PageImageLocator.directory(for: document.documentType)
         let data = try? await Task.detached(priority: .userInitiated) {

@@ -84,7 +84,7 @@ final class ImportViewModel {
                     self?.progress = value
                 }
                 guard !Task.isCancelled else { return }
-                self?.lastImportedTitle = ((try? document.title) ?? "Note unavailable")
+                self?.lastImportedTitle = document.title
                 self?.stage = .complete
                 self?.progress = 1
             } catch {

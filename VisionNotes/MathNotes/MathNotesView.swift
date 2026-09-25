@@ -6,6 +6,7 @@ import VisionKit
 
 @MainActor
 struct MathNotesView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @State private var viewModel = MathNotesViewModel()
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var showsPhotos = false
@@ -62,6 +63,15 @@ struct MathNotesView: View {
             )
             .fullScreenCover(isPresented: $showsScanner, content: scannerContent)
             .onChange(of: photoItems) { _, items in loadPhotoItems(items) }
+            .onChange(of: scenePhase) { _, phase in
+                // Pause on .inactive: locking goes inactive → background almost at
+                // once, and MLX must not have GPU work in flight in the background.
+                switch phase {
+                case .inactive, .background: viewModel.pauseForBackground()
+                case .active: viewModel.resumeAfterBackground()
+                @unknown default: break
+                }
+            }
             .onReceive(NotificationCenter.default.publisher(for: FirebirdModelDownloader.progressDidChange)) { _ in
                 viewModel.refreshModelStatus()
             }
@@ -69,11 +79,6 @@ struct MathNotesView: View {
                 viewModel.refreshModelStatus()
                 viewModel.refreshCloudCredentialStatus()
                 await viewModel.loadJobs()
-            }
-            .onReceive(
-                NotificationCenter.default.publisher(for: .visionNotesWillSuspendPlaintext)
-            ) { _ in
-                viewModel.suspendForProtectedLifecycle()
             }
     }
 
@@ -519,12 +524,6 @@ private struct MathNoteJobDetailView: View {
             }
         }
         .task(id: jobID) { await viewModel.selectJob(jobID) }
-        .onReceive(
-            NotificationCenter.default.publisher(for: .visionNotesDidResumePlaintext)
-        ) { _ in
-            Task { await viewModel.selectJob(jobID) }
-        }
-        .onDisappear { viewModel.releaseMaterializedPreview(for: jobID) }
     }
 
     private func statusCard(_ job: MathNoteJobManifest) -> some View {
@@ -611,7 +610,7 @@ private struct MathNoteJobDetailView: View {
             HStack(alignment: .top, spacing: 14) {
                 SourcePagesPreview(urls: sourcePages)
                     .frame(maxWidth: .infinity)
-                WebKitPDFPreview(url: renderedURL)
+                WebKitPDFPreview(url: renderedURL, version: job.updatedAt)
                     .frame(maxWidth: .infinity)
             }
             .frame(minHeight: 640)
@@ -623,7 +622,7 @@ private struct MathNoteJobDetailView: View {
                     .frame(height: 390)
                 Label("WebKit reconstruction", systemImage: "doc.richtext")
                     .font(.headline)
-                WebKitPDFPreview(url: renderedURL)
+                WebKitPDFPreview(url: renderedURL, version: job.updatedAt)
                     .frame(height: 520)
             }
         }
@@ -729,6 +728,8 @@ private struct SourcePagesPreview: View {
 
 private struct WebKitPDFPreview: UIViewRepresentable {
     let url: URL?
+    /// Re-rendering rewrites the file at the same URL, so reload on each version.
+    let version: Date
 
     func makeUIView(context: Context) -> PDFView {
         let view = PDFView()
@@ -736,49 +737,20 @@ private struct WebKitPDFPreview: UIViewRepresentable {
         view.displayMode = .singlePageContinuous
         view.displayDirection = .vertical
         view.backgroundColor = .secondarySystemBackground
-        context.coordinator.observe(view)
         return view
     }
 
     func updateUIView(_ view: PDFView, context: Context) {
         guard let url else { view.document = nil; return }
-        if view.document?.documentURL != url {
+        if view.document?.documentURL != url || context.coordinator.version != version {
+            context.coordinator.version = version
             view.document = PDFDocument(url: url)
         }
     }
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
-    static func dismantleUIView(_ uiView: PDFView, coordinator: Coordinator) {
-        coordinator.stopObserving()
-        uiView.document = nil
-    }
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
     final class Coordinator {
-        private var suspensionObserver: NSObjectProtocol?
-
-        deinit {
-            stopObserving()
-        }
-
-        func observe(_ view: PDFView) {
-            stopObserving()
-            suspensionObserver = NotificationCenter.default.addObserver(
-                forName: .visionNotesWillSuspendPlaintext,
-                object: nil,
-                queue: .main
-            ) { [weak view] _ in
-                view?.document = nil
-            }
-        }
-
-        func stopObserving() {
-            if let suspensionObserver {
-                NotificationCenter.default.removeObserver(suspensionObserver)
-                self.suspensionObserver = nil
-            }
-        }
+        var version: Date?
     }
 }

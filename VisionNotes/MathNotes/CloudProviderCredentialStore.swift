@@ -51,10 +51,10 @@ final class CloudProviderCredentialStore: @unchecked Sendable {
         ]
         let update = SecItemUpdate(identity as CFDictionary, attributes as CFDictionary)
         if update == errSecSuccess { return }
-        guard update == errSecItemNotFound else { throw SecureKeyStoreError.keychain(update) }
+        guard update == errSecItemNotFound else { throw CloudCredentialKeychainError.status(update) }
         let add = identity.merging(attributes) { _, new in new }
         let status = SecItemAdd(add as CFDictionary, nil)
-        guard status == errSecSuccess else { throw SecureKeyStoreError.keychain(status) }
+        guard status == errSecSuccess else { throw CloudCredentialKeychainError.status(status) }
     }
 
     func remove(_ provider: Provider) throws {
@@ -67,7 +67,16 @@ final class CloudProviderCredentialStore: @unchecked Sendable {
         ]
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw SecureKeyStoreError.keychain(status)
+            throw CloudCredentialKeychainError.status(status)
         }
+    }
+}
+
+enum CloudCredentialKeychainError: LocalizedError {
+    case status(OSStatus)
+
+    var errorDescription: String? {
+        guard case .status(let status) = self else { return nil }
+        return SecCopyErrorMessageString(status, nil) as String? ?? "Keychain error \(status)."
     }
 }

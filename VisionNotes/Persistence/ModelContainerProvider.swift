@@ -20,7 +20,9 @@ enum ModelContainerProvider {
     }
 
     static func makeContainer(inMemory: Bool = false) -> Result {
-        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: inMemory)
+        // "VisionNotes-v2" replaced the AES-GCM column layout; the old
+        // default.store is removed by LegacyStorageCleanup.
+        let configuration = ModelConfiguration("VisionNotes-v2", schema: schema, isStoredInMemoryOnly: inMemory)
         do {
             let container = try ModelContainer(for: schema, configurations: [configuration])
             return Result(container: container, warning: nil)

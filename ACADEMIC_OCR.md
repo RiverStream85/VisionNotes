@@ -4,12 +4,12 @@ Scan/import, source editing, comparison and the existing Academic exports remain
 
 ## Request path
 
-1. Seal normalized pages in the job store.
-2. On first setup, fetch the pinned model/tokenizer assets over Wi-Fi without sending page content. Stream directly into AES-GCM chunks and verify exact byte counts/SHA-256 before writing asset receipts.
-3. On later launches, open the encrypted app-container assets locally. Temporarily decrypt into protected files, load/evaluate MLX tensors and the tokenizer, then remove those files.
+1. Save normalized pages in the job folder.
+2. Use the model bundled with a development build, or download the pinned public files once through a background URLSession (no page content is sent).
+3. Load the model files in place with MLX and the tokenizer.
 4. Run the actual image encoder and autoregressive decoder with greedy decoding, a repetition-loop detector and one retry. Attention uses MLX by default; the authored Metal shader is opt-in. No rule-based text formatter or synthetic weights replace the model.
-5. Seal each page's generated Markdown with the pinned model revision in its checkpoint. A versioned cache filename prevents reuse of the removed attention prototype's results. A checkpoint must match the current page index and model identifier.
-6. Render the existing Markdown/LaTeX/HTML/PDF/facsimile/ZIP outputs locally, then seal them. Explicit sharing materializes the selected output temporarily.
+5. Save each page's generated Markdown with the pinned model revision in its checkpoint. A versioned cache filename prevents reuse of the removed attention prototype's results. A checkpoint must match the current page index and model identifier.
+6. Render the Markdown/LaTeX/HTML/PDF/facsimile/ZIP outputs directly into the job folder.
 
 ## Fusion boundary
 
@@ -17,17 +17,16 @@ The custom shader is `FirebirdRuntime/Sources/FirebirdRuntime/Kernels/FirebirdAt
 
 Image resolution and context length come from a device budget chosen from available process memory; see README. Truncation or an unbroken repetition loop is an inference failure rather than a completed transcription. Device memory/latency and handwritten-math accuracy remain to be validated on each target phone.
 
-## Encryption and cloud consent
+## Storage and cloud consent
 
-CryptoKit AES-GCM protects sources, OCR content, thumbnails, titles/original filenames, Academic artifacts and model chunks. File/record identity is authenticated. Model assets additionally use a pinned revision and SHA-256. Master-key wrapping uses Secure Enclave on supported hardware, with ThisDeviceOnly Keychain storage. Provider keys use Keychain; no content keys or provider secrets are bundled as plist files or logged.
-
-An availability failure pauses the local attempt. Cloud requests require a separate explicit one-shot consent for the saved job, consumed before any Mistral or SiliconFlow request. Storage/authentication failures never trigger cloud fallback. The optional cloud path sends the PDF to Mistral OCR and images/transcripts to Qwen3-VL-32B on SiliconFlow.
-
-Temporary plaintext is cleared after loading/rendering and at lifecycle cleanup/next launch. Persistent operational metadata remains in SwiftData. Migration does not guarantee forensic deletion of old storage blocks.
+Job files are plain files in `Application Support/AcademicJobs`, protected at rest by iOS Data Protection; there is no app-level encryption.
+An availability failure pauses the local attempt.
+Cloud requests require a separate explicit one-shot consent for the saved job, consumed before any Mistral or SiliconFlow request.
+The optional cloud path sends the PDF to Mistral OCR and images/transcripts to Qwen3-VL-32B on SiliconFlow.
 
 ## Validation status
 
-The original attention/formatting prototype is removed. Real-model loading/generation, the encrypted asset installer and fused attention integration are implemented in source. The custom shader passes Metal compilation. GPU numerical execution, package/app build and offline iPhone 17 Pro reconstruction have not yet passed in the current environment. See README for the exact test commands; these are still acceptance requirements, not completed claims.
+The original attention/formatting prototype is removed. Real-model loading/generation, the model download and the opt-in fused attention path are implemented. The custom shader passes Metal compilation. GPU numerical execution, package/app build and offline iPhone 17 Pro reconstruction have not yet passed in the current environment. See README for the exact test commands; these are still acceptance requirements, not completed claims.
 
 ## September 23 runtime corrections
 

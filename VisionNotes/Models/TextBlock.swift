@@ -11,8 +11,7 @@ import SwiftData
 final class TextBlock {
     @Attribute(.unique) var id: UUID
     var page: DocumentPage?
-    @Attribute(originalName: "text") var legacyText: String
-    @Attribute(.externalStorage) var textCiphertext: Data?
+    var text: String
     var confidence: Float
     var boundingBoxX: Double
     var boundingBoxY: Double
@@ -30,65 +29,20 @@ final class TextBlock {
         boundingBoxWidth: Double,
         boundingBoxHeight: Double,
         readingOrder: Int
-    ) throws {
+    ) {
         self.id = id
         self.page = page
-        legacyText = ""
-        textCiphertext = nil
+        self.text = text
         self.confidence = confidence
         self.boundingBoxX = boundingBoxX
         self.boundingBoxY = boundingBoxY
         self.boundingBoxWidth = boundingBoxWidth
         self.boundingBoxHeight = boundingBoxHeight
         self.readingOrder = readingOrder
-        try setText(text)
     }
 
-    func decryptedText() throws -> String {
-        try EncryptedTextCodec.open(
-            textCiphertext,
-            recordID: id,
-            field: "recognized-text-block"
-        )
-    }
-
-    func setText(_ text: String) throws {
-        let ciphertext = try EncryptedTextCodec.seal(
-            text,
-            recordID: id,
-            field: "recognized-text-block"
-        )
-        let verified = try EncryptedTextCodec.open(
-            ciphertext,
-            recordID: id,
-            field: "recognized-text-block"
-        )
-        guard verified == text else {
-            throw EncryptedTextCodecError.verificationFailed(field: "recognized-text-block")
-        }
-        textCiphertext = ciphertext
-        legacyText = ""
-    }
-
-    @discardableResult
-    func migrateLegacyTextIfNeeded() throws -> Bool {
-        if textCiphertext != nil {
-            guard !legacyText.isEmpty else { return false }
-            let decrypted = try decryptedText()
-            guard decrypted == legacyText else {
-                throw EncryptedTextCodecError.verificationFailed(field: "recognized-text-block")
-            }
-            legacyText = ""
-            return true
-        }
-
-        let plaintext = legacyText
-        try setText(plaintext)
-        return true
-    }
-
-    convenience init(recognized: RecognizedTextBlock, page: DocumentPage? = nil) throws {
-        try self.init(
+    convenience init(recognized: RecognizedTextBlock, page: DocumentPage? = nil) {
+        self.init(
             page: page,
             text: recognized.text,
             confidence: recognized.confidence,

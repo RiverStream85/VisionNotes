@@ -8,7 +8,7 @@ struct LibraryRow: View {
             thumbnail
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(((try? document.title) ?? "Note unavailable"))
+                Text(document.title)
                     .font(.headline)
                     .lineLimit(2)
 
@@ -33,22 +33,17 @@ struct LibraryRow: View {
                         .foregroundStyle(.red)
                         .lineLimit(2)
                 } else {
-                    switch Result(catching: { try document.textPreview() }) {
-                    case .success(let preview) where !preview.isEmpty:
+                    let preview = document.textPreview()
+                    if !preview.isEmpty {
                         Text(preview)
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
-                    case .success:
+                    } else {
                         Text(document.processingStatus == .completed ? "No text recognized." : "Waiting for text recognition…")
                             .font(.subheadline)
                             .foregroundStyle(.tertiary)
                             .lineLimit(1)
-                    case .failure:
-                        Label("Encrypted text unavailable", systemImage: "exclamationmark.lock")
-                            .font(.subheadline)
-                            .foregroundStyle(.red)
-                            .lineLimit(2)
                     }
                 }
             }
@@ -61,18 +56,7 @@ struct LibraryRow: View {
         document.pageCount == 1 ? "1 page" : "\(document.pageCount) pages"
     }
 
-    @ViewBuilder
     private var thumbnail: some View {
-        switch Result(catching: { try document.decryptedThumbnailData() }) {
-        case .success(let data):
-            DocumentThumbnail(data: data, type: document.documentType)
-        case .failure:
-            Image(systemName: "exclamationmark.lock")
-                .frame(width: 58, height: 72)
-                .background(Color(.secondarySystemBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .foregroundStyle(.red)
-                .accessibilityLabel("Encrypted thumbnail unavailable")
-        }
+        DocumentThumbnail(data: document.thumbnailData, type: document.documentType)
     }
 }

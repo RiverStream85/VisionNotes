@@ -65,8 +65,7 @@
 		E1000000000000000000000A /* MathNotesViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000000000000000000000A /* MathNotesViewModel.swift */; };
 		E1000000000000000000000B /* MathNotesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000000000000000000000B /* MathNotesView.swift */; };
 		E20000000000000000000001 /* AcademicOCRTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000001 /* AcademicOCRTests.swift */; };
-		E31000000000000000000001 /* SecureKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F31000000000000000000001 /* SecureKeyStore.swift */; };
-		E31000000000000000000002 /* EncryptedDataVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = F31000000000000000000002 /* EncryptedDataVault.swift */; };
+		E31000000000000000000002 /* LegacyStorageCleanup.swift in Sources */ = {isa = PBXBuildFile; fileRef = F31000000000000000000002 /* LegacyStorageCleanup.swift */; };
 		E31000000000000000000003 /* CloudProviderCredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F31000000000000000000003 /* CloudProviderCredentialStore.swift */; };
 		E31000000000000000000004 /* FirebirdLocalModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F31000000000000000000004 /* FirebirdLocalModel.swift */; };
 		E4655E3481FBC15A7178FFE2 /* VisionNotesUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 008B77EFDC6AC2061D5B5551 /* VisionNotesUITests.swift */; };
@@ -157,8 +156,7 @@
 		F1000000000000000000000B /* MathNotesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MathNotesView.swift; sourceTree = "<group>"; };
 		F20000000000000000000001 /* AcademicOCRTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcademicOCRTests.swift; sourceTree = "<group>"; };
 		F2B5B94C2EA07DA9E42DB0A0 /* TextBlock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextBlock.swift; sourceTree = "<group>"; };
-		F31000000000000000000001 /* SecureKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureKeyStore.swift; sourceTree = "<group>"; };
-		F31000000000000000000002 /* EncryptedDataVault.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EncryptedDataVault.swift; sourceTree = "<group>"; };
+		F31000000000000000000002 /* LegacyStorageCleanup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyStorageCleanup.swift; sourceTree = "<group>"; };
 		F31000000000000000000003 /* CloudProviderCredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudProviderCredentialStore.swift; sourceTree = "<group>"; };
 		F31000000000000000000004 /* FirebirdLocalModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirebirdLocalModel.swift; sourceTree = "<group>"; };
 		F42DDA1168DDA41AE60468C1 /* BoundingBoxConverter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundingBoxConverter.swift; sourceTree = "<group>"; };
@@ -376,8 +374,7 @@
 		F31000000000000000000010 /* Security */ = {
 			isa = PBXGroup;
 			children = (
-				F31000000000000000000001 /* SecureKeyStore.swift */,
-				F31000000000000000000002 /* EncryptedDataVault.swift */,
+				F31000000000000000000002 /* LegacyStorageCleanup.swift */,
 			);
 			path = Security;
 			sourceTree = "<group>";
@@ -585,8 +582,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				FB0000000000000000000004 /* FirebirdModelAssets.swift in Sources */,
-				E31000000000000000000001 /* SecureKeyStore.swift in Sources */,
-				E31000000000000000000002 /* EncryptedDataVault.swift in Sources */,
+				E31000000000000000000002 /* LegacyStorageCleanup.swift in Sources */,
 				E31000000000000000000003 /* CloudProviderCredentialStore.swift in Sources */,
 				E31000000000000000000004 /* FirebirdLocalModel.swift in Sources */,
 				E10000000000000000000001 /* MathNoteModels.swift in Sources */,

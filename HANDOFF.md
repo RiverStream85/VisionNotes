@@ -19,7 +19,7 @@ Other OCR experiments are archived outside the repo: `~/data/system-relocation/s
 - Resolution and context come from available process memory (`FirebirdDeviceBudget`); default ceiling is the 1,048,576-pixel tier.
 - Decode attention uses MLX SDPA; the authored Metal kernel is opt-in (`FirebirdDecodeAttention.fusedExperimental`) and was 42% slower on an M4.
 - Model files are public and not encrypted. A development build bundles them (build phase "Bundle Firebird model" copies `work/FirebirdModel`); otherwise the Academic tab downloads them through a background URLSession with its own progress section, and they load in place.
-- Notes and exports are still AES-GCM encrypted at the app level (see "Cleanup" below).
+- Notes, pages, Academic jobs and exports are plain files/SwiftData protected by iOS Data Protection; the app-level AES-GCM layer, Secure Enclave keys, temporary plaintext copies, lifecycle purge/cancel on `willResignActive` and the privacy cover were removed (owner decision, 2026-09-25). `LegacyStorageCleanup` deletes old encrypted data on launch; there are no users, so nothing is migrated.
 
 ## Measured on M4 Mac mini, Release, math fixture (`Evaluation/math-ocr-test.png`)
 
@@ -56,29 +56,21 @@ For unsigned compile checks over SSH: `xcodebuild build -project VisionNotes.xco
 
 ## Next steps (priority order)
 
-1. Cleanup of over-defensive code (audit below). Owner wants unnecessary checks removed.
+1. Finish the cleanup of over-defensive code (remaining items below). Owner wants unnecessary checks removed.
 2. Default scan path: Firebird for visible content, Apple Vision kept only for the text layer (search boxes, PDF text) — owner decided.
 3. Background handling: on `didEnterBackground` pause between pages and resume automatically when active (GPU work is not allowed in the background).
 4. Handwriting and figure recognition → Markdown, and a better preview. Add handwritten pages with reference transcriptions to `Evaluation/`.
 5. Record iPhone 18 Pro Max numbers (TTFT, tok/s, peak memory) and calibrate `FirebirdDeviceBudget.fixedReserve` / `reservePerPixel`, which are still estimates.
 
-## Cleanup audit (not yet applied)
+## Cleanup status
 
-Clear wins:
-- Seal-then-decrypt "verification" after every write: `LibraryDocument.swift:83-91,157-178`, `DocumentPage.swift:51-67`, `TextBlock.swift:47-63` (AES-GCM cannot disagree with itself).
-- Legacy plaintext migration, which only matters for August dev builds: `FileStorageService.swift:263-381`, `MathNoteJobStore.swift:335-443`, `DeviceMigrationStateStore` in `SecureKeyStore.swift`, `legacy*` model columns, `DocumentStore.swift:87-114,165-184,198-201`. It also runs three fetches on every store access.
-- `artifacts.zip` built twice: `AcademicDocumentRenderer.swift:57-67` and `MathNotePipeline.rebuildArchive`.
-- Dead or duplicate checks: `MathNoteJobStore.exists` (both branches identical), `StoredZIPWriter` "providerkeys" filter, four copies of the path-escape guard for internally generated names, `PDFReaderView.swift:191-194`.
-- Cloud consent checked 7+ times across pipeline/store/models; the explicit confirmation plus the `cloudFallbackAuthorized` parameter is enough.
-- Confirmation dialog before a purely local run (`MathNotesView.swift:28-39`).
+Done: app-level AES-GCM and Secure Enclave key wrapping, seal-then-reopen verification, legacy plaintext migration, temporary decrypted copies and preview bookkeeping, lifecycle purge/cancel and privacy cover, duplicate `artifacts.zip` build, model-weight encryption and hashing, dead `exists()` branch.
+About 2,400 lines removed; 93 unit tests and 4 UI tests pass on the iOS simulator.
 
-Behavior changes that improve UX:
-- Lifecycle purge/cancel on `willResignActive` (`VisionNotesApp.swift`, `MathNotesViewModel.suspendForProtectedLifecycle`, observers in `MathNotesView`/`PDFReaderView`): Control Center or a notification cancels jobs and imports.
-- Privacy cover flashes "locked" on every launch and inactive moment; keep `.privacySensitive()` or show it only in `.background`.
-- Errors are flattened to "could not finish" (`mathNoteSafeMessage`, `EncryptedTextCodec`, `AppError.wrap`); surface real messages.
-
-Open design question for the owner: drop app-level AES-GCM for notes entirely.
-iOS Data Protection already encrypts files at rest; the app layer adds temporary decrypted copies, lifecycle purges, whole-job re-encryption on every run, decrypt-on-every-row-render and decrypt-the-library-per-search.
-Replacement: plaintext SwiftData attributes and files with `completeUntilFirstUserAuthentication` (keeps background work possible), about 1,600 lines removed.
-If kept, still apply the items above and replace Secure Enclave key wrapping with a plain Keychain key.
-Tests that exercise removed behavior and would be deleted or adjusted: the legacy-migration tests in `FileStorageServiceTests`/`DocumentStoreTests`/`AcademicOCRTests`, the one-shot cloud-consent tests, the lifecycle purge tests (`testMaterializationStaysBlockedAfterLifecyclePurgeUntilResume`, `testLifecycleSuspensionRejectsInFlightPublicationBeforePurging`), and, if AES goes, the vault tamper/header tests and the tests that inject `EncryptedDataVault(keyProvider:)`.
+Remaining candidates:
+- Cloud consent is still checked in several layers (`MathNotePipeline` run/catch branches, `MathNoteJobStore.setCloudFallbackConsent`/`consumeCloudFallbackConsent`, `MathNoteModels.allowsCloudFallback`); the explicit confirmation plus the `cloudFallbackAuthorized` parameter is enough. Tests to drop: `testCloudFallbackAuthorizationIsOneShot`, `testPersistedFlagAloneCannotAuthorizeAnUpload`, `testCancelledRetryClearsUnusedCloudAuthorization`.
+- Confirmation dialog before a purely local run (`MathNotesView`, "Process … on this iPhone?").
+- Errors are flattened to "could not finish" (`mathNoteSafeMessage`, `AppError.wrap`); show `localizedDescription`.
+- `StoredZIPWriter` "providerkeys" filter and its test.
+- `input.pdf` is built on every run but only the cloud path uses it; build it lazily in `cloudRefinements`.
+- Background: the Academic job pauses on `.inactive`/`.background` (GPU work is not allowed in the background) and resumes automatically on `.active`; the interrupted page restarts from its beginning. Finer-grained resume within a page is possible future work.

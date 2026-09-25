@@ -2,7 +2,7 @@
 
 Vision Notes scans, recognizes, searches and exports notes on iOS. Ordinary Library OCR uses Apple Vision. Academic reconstruction now routes to **Firebird**, the application's local inference module using **Qwen3-VL-2B-Instruct, 4-bit**. Firebird is not a separately trained model. Mistral OCR and SiliconFlow's Qwen3-VL-32B remain optional cloud fallbacks after explicit confirmation.
 
-**Validation status:** the app has built and run on iPhone 17 Pro. Mac Metal numerical comparison passes all 18 float32/float16/bfloat16 and cache-boundary cases. The September 23 debugging session found and corrected a multimodal-input bug that dropped the actual image, plus a batched-prompt incompatibility in presence-penalty processing. The 24 Academic simulator tests and 4 UI tests pass in focused reruns, including real WebKit PDF export, encrypted persistence, cloud-consent boundaries, OCR editing, import and search. Full physical-device acceptance after these fixes, offline restart, handwriting accuracy, latency and peak memory still require validation. Do not claim a measured speedup or production-grade transcription accuracy.
+**Validation status:** the app has built and run on iPhone 17 Pro. Mac Metal numerical comparison passes all 18 float32/float16/bfloat16 and cache-boundary cases. The September 23 debugging session found and corrected a multimodal-input bug that dropped the actual image, plus a batched-prompt incompatibility in presence-penalty processing. The 24 Academic simulator tests and 4 UI tests pass in focused reruns, including real WebKit PDF export, persistence, cloud-consent boundaries, OCR editing, import and search. Full physical-device acceptance after these fixes, offline restart, handwriting accuracy, latency and peak memory still require validation. Do not claim a measured speedup or production-grade transcription accuracy.
 
 ## Repository layout
 
@@ -19,11 +19,11 @@ Vision Notes scans, recognizes, searches and exports notes on iOS. Ordinary Libr
 
 ## Local model setup and cold start
 
-The first Academic attempt provisions the pinned public model from Hugging Face over Wi-Fi/non-expensive networking. This downloads approximately **1.80 GB** of model/tokenizer data and does not send any notes, images or OCR text. Allow enough storage for the encrypted model plus a temporary decrypted copy while loading. Completed assets are reused; an interrupted individual asset is downloaded again.
-
-`VisionNotes/Resources/FirebirdModel.lock.json` pins the model revision, exact byte sizes and SHA-256 hashes. Downloads stream directly into 4 MiB CryptoKit AES-GCM chunks under `Application Support/VisionNotes/Models/Qwen3VL`; the installer never creates a persistent plaintext download. A receipt is saved only after the entire asset passes its pinned hash check. Integrity/key failures are surfaced and do not trigger cloud fallback.
-
-Once setup succeeds, later process cold starts use the encrypted container files without a model-host request. Loading temporarily materializes file-protected model files, verifies their hashes again, evaluates the model tensors, and deletes the temporary files. Temporary copies are also purged on app suspension and next startup. The first installation requires connectivity; a fresh installation is not advertised as ready to run offline.
+A development build can bundle the model: put the pinned files in `work/FirebirdModel` (`python3 Tools/download_firebird_model.py`) and the "Bundle Firebird model" build phase copies them into the app, which then loads them in place.
+Otherwise the Academic tab's **On-device model** section downloads about **1.80 GB** from Hugging Face over Wi-Fi through a background URLSession, so the transfer continues while the screen is locked or the app is in the background.
+Only public model files are downloaded; no notes, images or OCR text are sent.
+`VisionNotes/Resources/FirebirdModel.lock.json` pins the model revision and file sizes (its SHA-256 values are used by the developer download tool).
+Downloaded files live unencrypted in `Application Support/VisionNotes/Models/<revision>`, excluded from backup, and load in place; the weights are public, so app-level encryption would protect nothing.
 
 The runtime uses the actual vision encoder, tokenizer, 28-layer language model, KV cache and autoregressive generation.
 Image resolution and context length are chosen at load time from the memory the process may use (`os_proc_available_memory`), not from a device model name.
@@ -31,7 +31,7 @@ Image resolution and context length are chosen at load time from the memory the 
 A device that cannot hold the weights plus one page reports local inference unavailable instead of risking a memory termination.
 The app requests `com.apple.developer.kernel.increased-memory-limit`, so the signing team's App ID needs the Increased Memory Limit capability.
 The per-pixel and fixed memory reserves in that file are uncalibrated estimates; replace them with peaks measured by the evaluation harness on each target device.
-Output that hits the generation limit, or keeps repeating after a retry, is treated as incomplete and kept as an encrypted draft, not saved as a successful transcription.
+Output that hits the generation limit, or keeps repeating after a retry, is treated as incomplete and kept as a draft, not saved as a successful transcription.
 
 Upstream model: [Qwen3-VL-2B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct). Pinned conversion: [mlx-community/Qwen3-VL-2B-Instruct-4bit](https://huggingface.co/mlx-community/Qwen3-VL-2B-Instruct-4bit/tree/9c4f5209e57b31f4b9dfba735de3fb983739c9cc), Apache-2.0. The model weights are downloaded, not committed to this repository.
 
@@ -61,23 +61,19 @@ The shader uses 128 threads per query head and supports the pinned model's 16 qu
 
 The earlier synthetic 64-channel attention/formatting prototype has been removed from the application. No synthetic weight generator substitutes for the trained checkpoint.
 
-## Privacy and encryption
+## Privacy and storage
 
 | Data or operation | Behavior |
 | --- | --- |
 | Library OCR | On-device Apple Vision |
 | Academic inference | Local Qwen3-VL through Firebird |
-| Initial model setup | Public model download only; no note upload |
-| Sources, page images, OCR text, thumbnails, titles, original filenames | CryptoKit AES-GCM at rest |
-| Academic pages, edits, checkpoints and exports | CryptoKit AES-GCM at rest |
-| Model assets | Authenticated AES-GCM chunks plus pinned SHA-256 verification |
-| Operational metadata | IDs, opaque file names, timestamps, processing status and diagnostic metadata remain in SwiftData |
+| Model setup | Public model download only; no note upload |
+| Notes, page images, OCR text, Academic jobs and exports | Plain files and SwiftData in the app container, encrypted at rest by iOS Data Protection, excluded from backup |
 | Cloud providers | Separate, one-shot upload confirmation for the saved job |
-| Sharing | Plaintext deliverable supplied only to the selected share/save destination |
+| Provider credentials | ThisDeviceOnly Keychain items |
 
-A random 256-bit master key is wrapped using a non-exportable Secure Enclave P-256 agreement key on supported hardware. The AES key is not itself a Secure Enclave key. The simulator fallback uses a non-synchronizing `WhenUnlockedThisDeviceOnly` Keychain item. Content keys and provider credentials are not stored in plist files or logs. Record/file identity is authenticated with AES-GCM to reject ciphertext swapping.
-
-Temporary framework-compatible plaintext uses protected temporary directories and lifecycle cleanup. Existing legacy data is migrated after encryption round-trip verification; migration is not a claim of forensic erasure of historical database/filesystem blocks.
+There is no app-level encryption layer: iOS Data Protection already encrypts the container at rest with a passcode-derived key, and an app-level layer only added decrypted temporary copies, lifecycle purges and slower storage.
+Builds before this change kept notes in AES-GCM envelopes; `LegacyStorageCleanup` deletes that data and its Keychain keys on first launch instead of migrating it.
 
 ## Opt-in cloud fallback
 
@@ -89,8 +85,8 @@ Optional provider credentials are entered in **Cloud fallback keys** and stored 
 
 Open `VisionNotes.xcodeproj`, choose the VisionNotes scheme and a device. The local `FirebirdRuntime` Swift package pins MLX Swift LM 2.31.3, MLX Swift 0.31.3 and Swift Transformers 1.2.0. It requires a Swift 6.1-capable Xcode and an installed Metal Toolchain. A signing team is needed for a physical iPhone.
 
-The iOS simulator can exercise application UI/storage/export flows, but cannot validate this MLX inference path. Simulator Academic attempts report local inference unavailable without downloading weights; they never silently switch to cloud. Run actual model and kernel tests on a Metal-capable Mac or supported iPhone. Keep the app foregrounded during local reconstruction; sustained background inference is not implemented.
-Leaving the foreground cancels the job; decode stops after the current token, and remaining prefill evaluations are skipped, because iOS rejects GPU work submitted from the background. Weight loading is not interruptible.
+The iOS simulator can exercise application UI/storage/export flows, but cannot validate this MLX inference path. Simulator Academic attempts report local inference unavailable without downloading weights; they never silently switch to cloud. Run actual model and kernel tests on a Metal-capable Mac or supported iPhone. Keep the app foregrounded during local reconstruction; iOS does not allow GPU work in the background.
+Cancelling a job stops decoding after the current token and skips remaining prefill evaluations. Weight loading is not interruptible.
 
 Run app tests with Command-U. The `FirebirdCoreTests` target (recipe, device budget, loop detection, metrics) has no MLX dependency. Kernel numerical tests live in the FirebirdRuntime package and compare fused/unfused outputs and KV updates for float32/float16/bfloat16 across cache boundaries. They need GPU access:
 
@@ -108,7 +104,7 @@ python3 Tools/download_firebird_model.py
 Then run `ReconstructionTests` with `FIREBIRD_MODEL_DIR`, `FIREBIRD_TEST_IMAGE` and `FIREBIRD_EXPECTED_LATEX` set to a local model folder, a handwritten image and a known formula fragment.
 For a dataset evaluation, describe samples and optional reference transcriptions in the git-ignored `work/Evaluation/config.json` (format documented above `testLocalEvaluation`); each named variant sets the attention kernel, prompt, decoding and resolution tier, and the test writes each transcription plus a `report.json` with character error rate, time to first text, decode tokens per second, peak MLX memory and retry count. Run it in Release (`-configuration Release ENABLE_TESTABILITY=YES`); Debug MLX builds are several times slower. The application uses its own encrypted streaming installer; the developer cache is not the app storage format.
 
-Remaining acceptance includes: a first install on Wi-Fi, an offline process restart on iPhone 17 Pro, known handwritten-math samples, checking cloud traffic is absent before consent, and inspecting the app container for encrypted persistent content.
+Remaining acceptance includes: a first install on Wi-Fi, an offline process restart on iPhone 17 Pro, known handwritten-math samples, checking cloud traffic is absent before consent.
 
 ## Export behavior and limitations
 

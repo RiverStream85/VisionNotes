@@ -60,17 +60,6 @@ struct PDFReaderView: View {
         }
         .errorAlert($loadError)
         .task { await prepare() }
-        .onDisappear(perform: releaseMaterializedPDF)
-        .onReceive(
-            NotificationCenter.default.publisher(for: .visionNotesWillSuspendPlaintext)
-        ) { _ in
-            releaseMaterializedPDF()
-        }
-        .onReceive(
-            NotificationCenter.default.publisher(for: .visionNotesDidResumePlaintext)
-        ) { _ in
-            Task { await prepare() }
-        }
     }
 
     // MARK: - Sections
@@ -143,20 +132,14 @@ struct PDFReaderView: View {
 
             ScrollView {
                 if let currentPage {
-                    switch Result(catching: { try currentPage.decryptedRecognizedText() }) {
-                    case .success(let text) where !text.isEmpty:
-                        HighlightedBodyText(text: text, terms: highlightTerms, font: .callout)
-                    case .success:
+                    if !currentPage.recognizedText.isEmpty {
+                        HighlightedBodyText(text: currentPage.recognizedText, terms: highlightTerms, font: .callout)
+                    } else {
                         Text(document.processingStatus == .processing
                              ? "This page has not been recognized yet."
                              : "No text was recognized on this page.")
                             .font(.callout)
                             .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    case .failure:
-                        Label("Encrypted text unavailable", systemImage: "exclamationmark.lock")
-                            .font(.callout)
-                            .foregroundStyle(.red)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 } else {
@@ -177,7 +160,6 @@ struct PDFReaderView: View {
     // MARK: - Actions
 
     private func prepare() async {
-        releaseMaterializedPDF()
         documentURL = nil
         isReady = false
         currentPageNumber = PDFPageMapper.clampedPageNumber(
@@ -188,23 +170,13 @@ struct PDFReaderView: View {
         let fileName = document.localFileName
         defer { isReady = true }
         do {
-            let url = try FileStorageService.shared.url(for: fileName, in: .sources)
             guard FileStorageService.shared.fileExists(fileName, in: .sources) else {
                 throw AppError.fileMissing(fileName: fileName)
             }
-            documentURL = url
+            documentURL = try FileStorageService.shared.url(for: fileName, in: .sources)
         } catch {
-            releaseMaterializedPDF()
             loadError = ErrorAlert(error)
         }
-    }
-
-    private func releaseMaterializedPDF() {
-        FileStorageService.shared.releaseMaterializedFile(
-            fileName: document.localFileName,
-            in: .sources
-        )
-        documentURL = nil
     }
 
     private func goToPage(_ pageNumber: Int) {
@@ -257,7 +229,6 @@ struct PDFKitView: UIViewRepresentable {
     final class Coordinator: NSObject {
         private let currentPageNumber: Binding<Int>
         private var pageObserver: NSObjectProtocol?
-        private var suspensionObserver: NSObjectProtocol?
 
         init(currentPageNumber: Binding<Int>) {
             self.currentPageNumber = currentPageNumber
@@ -283,23 +254,12 @@ struct PDFKitView: UIViewRepresentable {
                     currentPageNumber.wrappedValue = pageNumber
                 }
             }
-            suspensionObserver = NotificationCenter.default.addObserver(
-                forName: .visionNotesWillSuspendPlaintext,
-                object: nil,
-                queue: .main
-            ) { [weak view] _ in
-                view?.document = nil
-            }
         }
 
         func stopObserving() {
             if let pageObserver {
                 NotificationCenter.default.removeObserver(pageObserver)
                 self.pageObserver = nil
-            }
-            if let suspensionObserver {
-                NotificationCenter.default.removeObserver(suspensionObserver)
-                self.suspensionObserver = nil
             }
         }
 

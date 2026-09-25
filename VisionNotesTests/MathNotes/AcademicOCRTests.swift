@@ -33,7 +33,7 @@ final class AcademicOCRTests: XCTestCase {
         XCTAssertThrowsError(try StorageRelativePath.path(of: parent.appendingPathComponent("outside"), under: alias))
     }
 
-    func testAliasedJobRootCanPrepareEncryptedExports() async throws {
+    func testAliasedJobRootExposesJobDirectoryForExports() async throws {
         let parent = makeTemporaryDirectory()
         let real = parent.appendingPathComponent("jobs", isDirectory: true)
         let alias = parent.appendingPathComponent("jobs-alias", isDirectory: true)
@@ -43,18 +43,16 @@ final class AcademicOCRTests: XCTestCase {
         let page = Data("private source page".utf8)
         let job = try await store.createJob(title: "Alias regression", normalizedPages: [page])
         try await store.write("$x=1$", relativePath: "machine-source.md", jobID: job.id)
-        let work = try await store.workingDirectory(for: job.id)
-        defer { try? FileManager.default.removeItem(at: work) }
-        XCTAssertEqual(try Data(contentsOf: work.appendingPathComponent(job.pages[0].sourcePath)), page)
-        let entries = try StoredZIPWriter.entries(in: work)
+        let directory = try await store.directory(for: job.id)
+        XCTAssertEqual(try Data(contentsOf: directory.appendingPathComponent(job.pages[0].sourcePath)), page)
+        let entries = try StoredZIPWriter.entries(in: directory)
         XCTAssertTrue(entries.contains { $0.path == "machine-source.md" })
-        try await store.absorbWorkingDirectory(work, jobID: job.id)
         let reopened = try await store.read(relativePath: job.pages[0].sourcePath, jobID: job.id)
         XCTAssertEqual(reopened, page)
     }
 
     @MainActor
-    func testCompletedJobReopensEncryptedSourcePreview() async throws {
+    func testCompletedJobReopensSourcePreview() async throws {
         let store = MathNoteJobStore(rootURL: makeTemporaryDirectory())
         let page = Data("saved page".utf8)
         let job = try await store.createJob(title: "Preview", normalizedPages: [page])
@@ -66,7 +64,6 @@ final class AcademicOCRTests: XCTestCase {
         XCTAssertFalse(model.isWorking)
         let url = try XCTUnwrap(model.sourcePageURLs().first)
         XCTAssertEqual(try Data(contentsOf: url), page)
-        model.releaseMaterializedPreview(for: job.id)
     }
 
     @MainActor
@@ -269,54 +266,9 @@ final class AcademicOCRTests: XCTestCase {
         let persistedPage = directory
             .appendingPathComponent(job.id.uuidString.lowercased())
             .appendingPathComponent("pages/page-001.jpg")
-        let ciphertext = try Data(contentsOf: persistedPage)
-        XCTAssertTrue(ciphertext.starts(with: EncryptedDataVault.header))
-        XCTAssertFalse(String(decoding: ciphertext, as: UTF8.self).contains("first"))
+        XCTAssertEqual(try Data(contentsOf: persistedPage), Data("first".utf8))
         try await store.delete(job.id)
         await XCTAssertThrowsErrorAsync { _ = try await store.load(job.id) }
-    }
-
-    func testAwaitingConsentPurgesDecryptedJobFiles() async throws {
-        let directory = makeTemporaryDirectory()
-        let store = MathNoteJobStore(rootURL: directory)
-        let job = try await store.createJob(
-            title: "Temporary cleanup",
-            normalizedPages: [Data("page".utf8)]
-        )
-        let materialized = try await store.materializedDirectory(for: job.id)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: materialized.path))
-
-        _ = try await store.update(job.id, stage: .awaitingCloudConsent)
-
-        XCTAssertFalse(FileManager.default.fileExists(atPath: materialized.path))
-        let persistedPage = try await store.read(
-            relativePath: "pages/page-001.jpg",
-            jobID: job.id
-        )
-        XCTAssertEqual(persistedPage, Data("page".utf8))
-    }
-
-    func testPreviewReleaseCannotDeleteRendererWorkOrANewerPreview() async throws {
-        let directory = makeTemporaryDirectory()
-        let store = MathNoteJobStore(rootURL: directory)
-        let job = try await store.createJob(
-            title: "Preview ownership",
-            normalizedPages: [Data("page".utf8)]
-        )
-
-        let firstPreview = try await store.materializedDirectory(for: job.id)
-        let workDirectory = try await store.workingDirectory(for: job.id)
-        let secondPreview = try await store.materializedDirectory(for: job.id)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: firstPreview.path))
-
-        await store.releaseMaterializedPreview(for: job.id, expectedURL: firstPreview)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: secondPreview.path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: workDirectory.path))
-
-        await store.releaseMaterializedPreview(for: job.id, expectedURL: secondPreview)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: secondPreview.path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: workDirectory.path))
-        try FileManager.default.removeItem(at: workDirectory)
     }
 
     func testTypedLocalFailureAwaitsConsentAndPreservesCheckpointAndError() async throws {
@@ -500,21 +452,6 @@ final class AcademicOCRTests: XCTestCase {
         XCTAssertTrue(providerResources.isEmpty)
     }
 
-    func testAESGCMVaultAuthenticatesPathAndRejectsTampering() throws {
-        let key = SymmetricKey(data: Data(repeating: 0x4f, count: 32))
-        let vault = EncryptedDataVault(keyProvider: { key })
-        let plaintext = Data("private theorem notes".utf8)
-        let sealed = try vault.seal(plaintext, context: "notes/a")
-
-        XCTAssertTrue(sealed.starts(with: EncryptedDataVault.header))
-        XCTAssertEqual(try vault.open(sealed, context: "notes/a"), plaintext)
-        XCTAssertThrowsError(try vault.open(sealed, context: "notes/b"))
-
-        var tampered = sealed
-        tampered[tampered.index(before: tampered.endIndex)] ^= 0x01
-        XCTAssertThrowsError(try vault.open(tampered, context: "notes/a"))
-    }
-
     func testNormalizationPreservesOrientationAndFacsimilePageCount() async throws {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
@@ -655,6 +592,8 @@ private actor RendererSpy: AcademicDocumentRendering {
             to: jobDirectory.appendingPathComponent(manifest.artifacts.markdown),
             options: .atomic
         )
+        // The real renderer packages artifacts.zip itself.
+        try Data().write(to: jobDirectory.appendingPathComponent(manifest.artifacts.archive), options: .atomic)
     }
 }
 

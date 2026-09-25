@@ -149,20 +149,14 @@ struct ImageReaderView: View {
 
             ScrollView {
                 if let page {
-                    switch Result(catching: { try page.decryptedRecognizedText() }) {
-                    case .success(let text) where !text.isEmpty:
-                        HighlightedBodyText(text: text, terms: highlightTerms, font: .callout)
-                    case .success:
+                    if !page.recognizedText.isEmpty {
+                        HighlightedBodyText(text: page.recognizedText, terms: highlightTerms, font: .callout)
+                    } else {
                         Text(document.processingStatus == .processing
                              ? "Recognizing text…"
                              : "No text was recognized on this page.")
                             .font(.callout)
                             .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    case .failure:
-                        Label("Encrypted text unavailable", systemImage: "exclamationmark.lock")
-                            .font(.callout)
-                            .foregroundStyle(.red)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 } else {
@@ -244,15 +238,11 @@ struct ImageReaderView: View {
     }
 
     private func select(_ block: TextBlock) {
-        do {
-            selectedBlockText = try block.decryptedText()
-        } catch {
-            errorAlert = ErrorAlert(error)
-        }
+        selectedBlockText = block.text
     }
 
     private func accessibilityText(for block: TextBlock) -> String {
-        (try? block.decryptedText()) ?? "Encrypted text unavailable"
+        block.text
     }
 
     /// Reads the file off the main actor: only `Sendable` values (a file name

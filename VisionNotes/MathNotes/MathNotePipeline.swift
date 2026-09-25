@@ -98,15 +98,9 @@ struct MathNotePipeline: Sendable {
             }
 
             manifest = try await transition(jobID, to: .rendering, progress: progress)
-            operation = "Preparing export files"
-            let jobDirectory = try await store.workingDirectory(for: jobID)
-            defer { try? FileManager.default.removeItem(at: jobDirectory) }
-            operation = "Rendering PDF export"
-            try await renderer.render(markdown: source, manifest: manifest, jobDirectory: jobDirectory)
-            operation = "Packaging exports"
-            try await rebuildArchive(manifest: manifest, directory: jobDirectory)
-            operation = "Encrypting exports"
-            try await store.absorbWorkingDirectory(jobDirectory, jobID: jobID)
+            operation = "Rendering exports"
+            try await renderer.render(markdown: source, manifest: manifest,
+                                      jobDirectory: try await store.directory(for: jobID))
             let uncertainCount = Self.uncertainCount(in: source)
             manifest = try await store.update(
                 jobID,
@@ -182,11 +176,8 @@ struct MathNotePipeline: Sendable {
             }
             try await store.write(trimmed, relativePath: "edited-source.md", jobID: jobID)
             manifest = try await transition(jobID, to: .rendering, progress: progress)
-            let jobDirectory = try await store.workingDirectory(for: jobID)
-            defer { try? FileManager.default.removeItem(at: jobDirectory) }
-            try await renderer.render(markdown: trimmed, manifest: manifest, jobDirectory: jobDirectory)
-            try await rebuildArchive(manifest: manifest, directory: jobDirectory)
-            try await store.absorbWorkingDirectory(jobDirectory, jobID: jobID)
+            try await renderer.render(markdown: trimmed, manifest: manifest,
+                                      jobDirectory: try await store.directory(for: jobID))
             manifest = try await store.update(
                 jobID,
                 stage: .complete,
@@ -418,7 +409,7 @@ struct MathNotePipeline: Sendable {
     private func sourcePageURLs(_ manifest: MathNoteJobManifest) async throws -> [URL] {
         var urls: [URL] = []
         for page in manifest.pages.sorted(by: { $0.index < $1.index }) {
-            urls.append(try await store.materializedURL(relativePath: page.sourcePath, jobID: manifest.id))
+            urls.append(try await store.url(relativePath: page.sourcePath, jobID: manifest.id))
         }
         return urls
     }
@@ -576,19 +567,6 @@ struct MathNotePipeline: Sendable {
         }.sorted { $0.0 < $1.0 }.map(\.1)
         guard crops.count == inputs.crops.count else { throw MathNoteError.malformedProviderResponse }
         return (overview, crops)
-    }
-
-    private func rebuildArchive(manifest: MathNoteJobManifest, directory: URL) async throws {
-        try await Task.detached(priority: .utility) {
-            let entries = try StoredZIPWriter.entries(
-                in: directory,
-                excludingNames: [manifest.artifacts.archive]
-            )
-            try StoredZIPWriter.write(
-                entries: entries,
-                to: directory.appendingPathComponent(manifest.artifacts.archive)
-            )
-        }.value
     }
 
     static func uncertainCount(in source: String) -> Int {

@@ -45,9 +45,10 @@ final class MathNotesViewModel {
     @ObservationIgnored private let pipeline: MathNotePipeline
     @ObservationIgnored private let credentialStore: CloudProviderCredentialStore
     private var processingTask: Task<Void, Never>?
-    @ObservationIgnored private var previewReleaseTail: Task<Void, Never>?
-    @ObservationIgnored private var previewGeneration = 0
-    @ObservationIgnored private var previewConsumerJobID: UUID?
+    /// The most recent selection; a slower earlier selection must not overwrite it.
+    @ObservationIgnored private var requestedJobID: UUID?
+    /// A job stopped because the app went to the background, resumed on return.
+    @ObservationIgnored private var pausedJobID: UUID?
     @ObservationIgnored private var modelDownloadTask: Task<Void, Never>?
 
     init(
@@ -198,7 +199,7 @@ final class MathNotesViewModel {
                 upsert(job)
                 _ = try await pipeline.run(jobID: job.id, progress: progressHandler)
                 await loadJobs()
-                if previewConsumerJobID == job.id { await selectJob(job.id) }
+                if requestedJobID == job.id { await selectJob(job.id) }
             } catch {
                 await handleRunError(error, jobID: createdJobID)
             }
@@ -214,9 +215,31 @@ final class MathNotesViewModel {
             do {
                 _ = try await pipeline.run(jobID: job.id, progress: progressHandler)
                 await loadJobs()
-                if previewConsumerJobID == job.id { await selectJob(job.id) }
+                if requestedJobID == job.id { await selectJob(job.id) }
             } catch {
                 await handleRunError(error, jobID: job.id)
+            }
+        }
+    }
+
+    /// iOS does not allow GPU work in the background, so stop the running job
+    /// there (finished pages keep their checkpoints) and continue on return.
+    func pauseForBackground() {
+        guard let task = processingTask, let id = activeJobID else { return }
+        pausedJobID = id
+        task.cancel()
+    }
+
+    func resumeAfterBackground() {
+        guard let id = pausedJobID else { return }
+        let running = processingTask
+        Task { [weak self] in
+            await running?.value
+            guard let self, self.pausedJobID == id else { return }
+            self.pausedJobID = nil
+            await self.loadJobs()
+            if let job = self.jobs.first(where: { $0.id == id }), job.stage == .cancelled {
+                self.resume(job)
             }
         }
     }
@@ -240,7 +263,7 @@ final class MathNotesViewModel {
                     progress: progressHandler
                 )
                 await loadJobs()
-                if previewConsumerJobID == job.id { await selectJob(job.id) }
+                if requestedJobID == job.id { await selectJob(job.id) }
             } catch {
                 refreshCloudCredentialStatus()
                 await handleRunError(error, jobID: job.id)
@@ -302,39 +325,17 @@ final class MathNotesViewModel {
     }
 
     func selectJob(_ id: UUID) async {
-        previewGeneration &+= 1
-        let generation = previewGeneration
-        previewConsumerJobID = id
+        requestedJobID = id
         do {
-            if let previewReleaseTail { await previewReleaseTail.value }
-            if let previousID = selectedJob?.id, previousID != id {
-                await store.releaseMaterializedPreview(
-                    for: previousID,
-                    expectedURL: selectedJobDirectory
-                )
-                selectedJobDirectory = nil
-            }
             let job = try await store.load(id)
             let source = try await pipeline.source(jobID: id)
-            let directory: URL?
-            if job.stage == .complete {
-                directory = try await store.materializedDirectory(for: id)
-            } else {
-                await store.releaseMaterializedPreview(for: id)
-                directory = nil
-            }
-
-            guard previewGeneration == generation, previewConsumerJobID == id else {
-                if let directory {
-                    await store.releaseMaterializedPreview(for: id, expectedURL: directory)
-                }
-                return
-            }
+            let directory = try await store.directory(for: id)
+            guard requestedJobID == id else { return }
             selectedJob = job
             selectedSource = source
             selectedJobDirectory = directory
         } catch {
-            guard previewGeneration == generation, previewConsumerJobID == id else { return }
+            guard requestedJobID == id else { return }
             errorMessage = error.mathNoteSafeMessage
         }
     }
@@ -346,7 +347,6 @@ final class MathNotesViewModel {
     func rebuildSelected() {
         guard processingTask == nil, let job = selectedJob else { return }
         let source = selectedSource
-        let generation = previewGeneration
         processingTask = Task { [weak self] in
             guard let self else { return }
             defer { processingTask = nil }
@@ -357,20 +357,7 @@ final class MathNotesViewModel {
                     markdown: source,
                     progress: progressHandler
                 )
-                let shouldMaterialize = previewGeneration == generation
-                    && previewConsumerJobID == updated.id
-                let materializedDirectory = shouldMaterialize
-                    ? try await store.materializedDirectory(for: updated.id)
-                    : nil
-                selectedJob = updated
-                if previewGeneration == generation, previewConsumerJobID == updated.id {
-                    selectedJobDirectory = materializedDirectory
-                } else if let materializedDirectory {
-                    await store.releaseMaterializedPreview(
-                        for: updated.id,
-                        expectedURL: materializedDirectory
-                    )
-                }
+                if selectedJob?.id == updated.id { selectedJob = updated }
                 upsert(updated)
             } catch {
                 errorMessage = error.mathNoteSafeMessage
@@ -386,8 +373,7 @@ final class MathNotesViewModel {
                 if activeJobID == job.id { cancel() }
                 try await store.delete(job.id)
                 if selectedJob?.id == job.id {
-                    previewGeneration &+= 1
-                    previewConsumerJobID = nil
+                    requestedJobID = nil
                     selectedJob = nil
                     selectedSource = ""
                     selectedJobDirectory = nil
@@ -405,8 +391,7 @@ final class MathNotesViewModel {
             guard let self else { return }
             do {
                 try await store.deleteAll()
-                previewGeneration &+= 1
-                previewConsumerJobID = nil
+                requestedJobID = nil
                 jobs = []
                 selectedJob = nil
                 selectedSource = ""
@@ -421,31 +406,6 @@ final class MathNotesViewModel {
         guard let directory = selectedJobDirectory else { return nil }
         let url = directory.appendingPathComponent(relativePath)
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
-    }
-
-    func releaseMaterializedPreview(for jobID: UUID) {
-        previewGeneration &+= 1
-        if previewConsumerJobID == jobID { previewConsumerJobID = nil }
-        let expectedURL = selectedJob?.id == jobID ? selectedJobDirectory : nil
-        if selectedJob?.id == jobID {
-            selectedJobDirectory = nil
-        }
-        let predecessor = previewReleaseTail
-        let store = self.store
-        let task = Task {
-            if let predecessor { await predecessor.value }
-            await store.releaseMaterializedPreview(for: jobID, expectedURL: expectedURL)
-        }
-        previewReleaseTail = task
-    }
-
-    /// Cancels pipeline work before lifecycle plaintext purging and drops the
-    /// current preview. Encrypted checkpoints remain available for Resume.
-    func suspendForProtectedLifecycle() {
-        processingTask?.cancel()
-        if let jobID = previewConsumerJobID {
-            releaseMaterializedPreview(for: jobID)
-        }
     }
 
     func sourcePageURLs() -> [URL] {
@@ -481,6 +441,8 @@ final class MathNotesViewModel {
 
     private func handleRunError(_ error: Error, jobID: UUID?) async {
         await loadJobs()
+        // A background pause is expected; the job resumes on return without an alert.
+        if let jobID, jobID == pausedJobID { return }
         if let jobID,
            let job = jobs.first(where: { $0.id == jobID }),
            job.stage == .awaitingCloudConsent,

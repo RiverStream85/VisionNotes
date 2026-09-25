@@ -7,8 +7,7 @@ Vision Notes scans, recognizes, searches and exports notes on iOS. Ordinary Libr
 ## Repository layout
 
 `VisionNotes/`, `FirebirdRuntime/` and the test targets are the Vision Notes app and its local MLX runtime.
-`DeepSeekOCR/` is a separate llama.cpp proof of concept that runs DeepSeek-OCR-2 (3B MoE, GGUF) on iPhone; it has its own XcodeGen project, bootstrap script, math fixture and 28-check verifier (see its README).
-Its fixture and verifier serve as the shared benchmark when comparing the two local OCR runtimes.
+`Evaluation/` holds the shared math OCR benchmark page, its reference transcription and an ordered 28-check verifier, taken from an earlier DeepSeek-OCR-2 proof of concept (see commit e5a7184; branch `archive/firered-attempt` keeps an uncompiled FireRed-OCR attempt).
 
 ## Features
 

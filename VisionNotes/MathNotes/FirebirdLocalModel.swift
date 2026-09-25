@@ -40,31 +40,24 @@ struct FirebirdLocalModel: Sendable {
         let logger = Logger(subsystem: "VisionNotes", category: "FirebirdSetup")
         let runtime = FirebirdRuntime.shared
         if !(await runtime.isLoaded()) {
-            if let bundled = FirebirdModelAssets.bundledModelDirectory() {
-                await progress?("Loading bundled local model")
-                logger.notice("Loading model bundled with the app")
-                try await Self.load(runtime, directory: bundled, logger: logger)
+            let directory: URL
+            if let ready = FirebirdModelAssets.modelDirectory() {
+                directory = ready
             } else {
-                // Fetch public model assets only on first setup. No page is uploaded.
-                // Crypto/authentication errors deliberately propagate unchanged.
+                // Public model files only; no page is uploaded. The transfer keeps
+                // running in the background if this attempt is cancelled.
+                await progress?("Downloading model · continues in the background")
+                logger.notice("Downloading model files")
                 do {
-                    await progress?("Checking / downloading model · first setup")
-                    logger.notice("Checking or downloading encrypted model assets")
-                    try await FirebirdModelAssets.shared.ensureInstalled()
-                    logger.notice("Encrypted model assets ready")
-                } catch is CancellationError { throw CancellationError() }
-                catch let error as URLError {
-                    if error.code == .cancelled { throw CancellationError() }
+                    directory = try await FirebirdModelAssets.download()
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
                     throw MathNoteError.localInferenceUnavailable
                 }
-                await progress?("Decrypting local model")
-                logger.notice("Decrypting model for loading")
-                let directory = try await FirebirdModelAssets.shared.materialize()
-                defer { try? FileManager.default.removeItem(at: directory) }
-                logger.notice("Model decryption complete")
-                await progress?("Loading local model")
-                try await Self.load(runtime, directory: directory, logger: logger)
             }
+            await progress?("Loading local model")
+            try await Self.load(runtime, directory: directory, logger: logger)
         }
         do {
             let result = try await runtime.reconstruct(imageData: imageData, recipe: Self.recipe) { event in

@@ -33,6 +33,13 @@ final class MathNotesViewModel {
     var mistralCredentialDraft = ""
     var qwen3VLCredentialDraft = ""
     var errorMessage: String?
+    private(set) var modelStatus = ModelStatus.checking
+
+    enum ModelStatus: Equatable {
+        case checking, ready, notDownloaded
+        case downloading(received: Int64, total: Int64)
+        case failed
+    }
 
     @ObservationIgnored private let store: MathNoteJobStore
     @ObservationIgnored private let pipeline: MathNotePipeline
@@ -41,6 +48,7 @@ final class MathNotesViewModel {
     @ObservationIgnored private var previewReleaseTail: Task<Void, Never>?
     @ObservationIgnored private var previewGeneration = 0
     @ObservationIgnored private var previewConsumerJobID: UUID?
+    @ObservationIgnored private var modelDownloadTask: Task<Void, Never>?
 
     init(
         store: MathNoteJobStore = .shared,
@@ -52,6 +60,33 @@ final class MathNotesViewModel {
     }
 
     var isWorking: Bool { processingTask != nil || isPreparingDraft }
+
+    func refreshModelStatus() {
+        if FirebirdModelAssets.modelDirectory() != nil {
+            modelStatus = .ready
+        } else if modelDownloadTask != nil {
+            let snapshot = FirebirdModelDownloader.shared.snapshot()
+            modelStatus = .downloading(received: snapshot.receivedBytes, total: snapshot.totalBytes)
+        } else if modelStatus != .failed {
+            modelStatus = .notDownloaded
+        }
+    }
+
+    /// Starts or rejoins the background model download, independent of any job.
+    func downloadModel() {
+        guard modelDownloadTask == nil else { return }
+        modelStatus = .downloading(received: 0, total: 0)
+        modelDownloadTask = Task { [weak self] in
+            do {
+                _ = try await FirebirdModelAssets.download()
+                self?.modelDownloadTask = nil
+                self?.refreshModelStatus()
+            } catch {
+                self?.modelDownloadTask = nil
+                self?.modelStatus = .failed
+            }
+        }
+    }
 
     func loadJobs() async {
         do {

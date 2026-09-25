@@ -62,7 +62,11 @@ struct MathNotesView: View {
             )
             .fullScreenCover(isPresented: $showsScanner, content: scannerContent)
             .onChange(of: photoItems) { _, items in loadPhotoItems(items) }
+            .onReceive(NotificationCenter.default.publisher(for: FirebirdModelDownloader.progressDidChange)) { _ in
+                viewModel.refreshModelStatus()
+            }
             .task {
+                viewModel.refreshModelStatus()
                 viewModel.refreshCloudCredentialStatus()
                 await viewModel.loadJobs()
             }
@@ -124,6 +128,7 @@ struct MathNotesView: View {
 
     private var academicList: some View {
         List {
+            modelSection
             newDocumentSection
             savedJobsSection
             credentialsSection
@@ -166,6 +171,51 @@ struct MathNotesView: View {
         }
     }
 
+    private var modelSection: some View {
+        Section {
+            switch viewModel.modelStatus {
+            case .checking:
+                ProgressView()
+            case .ready:
+                Label("On-device model ready", systemImage: "checkmark.circle")
+                    .foregroundStyle(.green)
+            case .notDownloaded:
+                Button {
+                    viewModel.downloadModel()
+                } label: {
+                    Label("Download model (1.8 GB, Wi-Fi)", systemImage: "arrow.down.circle")
+                }
+            case .downloading(let received, let total):
+                VStack(alignment: .leading, spacing: 6) {
+                    if total > 0 {
+                        ProgressView(value: Double(received), total: Double(total))
+                        Text("\(Self.byteFormatter.string(fromByteCount: received)) of \(Self.byteFormatter.string(fromByteCount: total))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ProgressView()
+                    }
+                }
+            case .failed:
+                Button {
+                    viewModel.downloadModel()
+                } label: {
+                    Label("Download failed · Retry", systemImage: "exclamationmark.arrow.circlepath")
+                }
+            }
+        } header: {
+            Text("On-device model")
+        } footer: {
+            Text("Qwen3-VL-2B (4-bit). The download continues while the screen is locked or the app is in the background. Only public model files are downloaded; no pages are uploaded.")
+        }
+    }
+
+    private static let byteFormatter: ByteCountFormatter = {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        return formatter
+    }()
+
     private var savedJobsSection: some View {
         Section("Saved jobs") {
             if viewModel.jobs.isEmpty {
@@ -192,10 +242,7 @@ struct MathNotesView: View {
     private var privacySection: some View {
         Section {
             Label("Academic jobs begin with on-device reconstruction.", systemImage: "iphone.gen3")
-            Text("Your notes and local model are encrypted on this iPhone. Pages are sent to cloud providers only after you choose cloud fallback and confirm the upload.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-            Text("First use downloads about 1.8 GB of model files over Wi-Fi. This does not upload your pages. Once setup finishes, local reconstruction can be attempted offline.")
+            Text("Your notes are encrypted on this iPhone. Pages are sent to cloud providers only after you choose cloud fallback and confirm the upload.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         } header: {

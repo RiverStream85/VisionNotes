@@ -65,35 +65,52 @@ final class ReconstructionTests: XCTestCase {
 }
 
 /// Optional local evaluation, configured by the git-ignored
-/// `work/Evaluation/config.json`. Every sample runs under each attention mode,
-/// so accuracy and speed of the fused kernel are compared on identical input:
+/// `work/Evaluation/config.json`. Each variant runs every sample, so prompt,
+/// decoding, resolution tier and attention kernel are compared on identical input:
 ///
-///     {"modelPath": "...", "outputPath": "...", "tierCeiling": "extended",
-///      "attention": ["mlx", "fusedExperimental"], "decoding": ["recipe", "greedy"],
+///     {"modelPath": "...", "outputPath": "...",
+///      "variants": [{"name": "baseline", "attention": "mlx", "prompt": "recipe",
+///                    "decoding": "recipe", "tierCeiling": "extended"}],
 ///      "samples": [{"image": "page1.jpg", "reference": "page1.md"}]}
 ///
-/// Sample paths are relative to the config file. `reference` is optional.
+/// `prompt` is "recipe" or literal prompt text; `decoding` is "recipe" or
+/// "greedy". Sample paths are relative to the config file; `reference` is optional.
 extension ReconstructionTests {
     private struct EvaluationConfig: Decodable {
         struct Sample: Decodable { let image: String; let reference: String? }
+        struct Variant: Decodable {
+            let name: String
+            let attention: String?
+            let prompt: String?
+            let decoding: String?
+            let tierCeiling: String?
+        }
         let modelPath: String
         let outputPath: String
-        let tierCeiling: String?
-        let attention: [String]?
-        /// "recipe" (default) or "greedy" (no penalty, no no-repeat rule).
-        let decoding: [String]?
         let maxOutputTokens: Int?
+        let variants: [Variant]
         let samples: [Sample]
     }
 
     private struct SampleReport: Encodable {
         let image: String
-        let attention: String
-        let decoding: String
+        let variant: String
         let completed: Bool
         let failure: String?
         let characterErrorRate: Double?
         let metrics: FirebirdGenerationMetrics?
+    }
+
+    private func recipe(for variant: EvaluationConfig.Variant) throws -> FirebirdRecipe {
+        let base = FirebirdRecipe.academicTranscription
+        let prompt = variant.prompt.map { $0 == "recipe" ? base.prompt : $0 } ?? base.prompt
+        let attempts: [FirebirdDecoding]
+        switch variant.decoding ?? "recipe" {
+        case "recipe": attempts = base.attempts
+        case "greedy": attempts = [.greedy]
+        case let other: throw XCTSkip("Unknown decoding \(other)")
+        }
+        return FirebirdRecipe(version: base.version + "-" + variant.name, prompt: prompt, attempts: attempts)
     }
 
     func testLocalEvaluation() async throws {
@@ -109,53 +126,46 @@ extension ReconstructionTests {
         let base = configURL.deletingLastPathComponent()
         let destination = URL(fileURLWithPath: config.outputPath)
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
-        let modes = try (config.attention ?? ["mlx"]).map {
-            try XCTUnwrap(FirebirdDecodeAttention(rawValue: $0), "Unknown attention mode \($0)")
-        }
-        let ceiling = try config.tierCeiling.map {
-            try XCTUnwrap(FirebirdDeviceBudget.Tier(rawValue: $0), "Unknown tier \($0)")
-        } ?? FirebirdDeviceBudget.defaultCeiling
-
-        let baseRecipe = FirebirdRecipe.academicTranscription
-        let recipes = try (config.decoding ?? ["recipe"]).map { name -> (String, FirebirdRecipe) in
-            switch name {
-            case "recipe": return (name, baseRecipe)
-            case "greedy": return (name, FirebirdRecipe(version: baseRecipe.version + "-greedy",
-                                                        prompt: baseRecipe.prompt, attempts: [.greedy]))
-            default: throw XCTSkip("Unknown decoding variant \(name)")
-            }
-        }
 
         var reports: [SampleReport] = []
-        for mode in modes {
-            let runtime = FirebirdRuntime()
-            try await runtime.load(directory: URL(fileURLWithPath: config.modelPath),
-                options: FirebirdRuntimeOptions(decodeAttention: mode, tierCeiling: ceiling,
-                                                maxOutputTokens: config.maxOutputTokens))
-            for (variant, recipe) in recipes {
-                for sample in config.samples {
-                    let imageURL = base.appendingPathComponent(sample.image)
-                    let stem = imageURL.deletingPathExtension().lastPathComponent + "-" + mode.rawValue + "-" + variant
-                    let reference = try sample.reference.map {
-                        try String(contentsOf: base.appendingPathComponent($0), encoding: .utf8)
-                    }
-                    var output = ""
-                    var report: SampleReport
-                    do {
-                        let result = try await runtime.reconstruct(imageData: Data(contentsOf: imageURL), recipe: recipe)
-                        output = result.markdown
-                        report = SampleReport(image: sample.image, attention: mode.rawValue, decoding: variant,
-                            completed: true, failure: nil,
-                            characterErrorRate: reference.map { TranscriptionMetrics.characterErrorRate(prediction: output, reference: $0) },
-                            metrics: result.metrics)
-                    } catch FirebirdRuntimeError.incomplete(let reason, let partial) {
-                        output = partial
-                        report = SampleReport(image: sample.image, attention: mode.rawValue, decoding: variant, completed: false,
-                            failure: reason.rawValue, characterErrorRate: nil, metrics: nil)
-                    }
-                    try output.write(to: destination.appendingPathComponent(stem + ".md"), atomically: true, encoding: .utf8)
-                    reports.append(report)
+        var loaded: (attention: FirebirdDecodeAttention, tier: FirebirdDeviceBudget.Tier, runtime: FirebirdRuntime)?
+        for variant in config.variants {
+            let attention = try XCTUnwrap(FirebirdDecodeAttention(rawValue: variant.attention ?? "mlx"),
+                                          "Unknown attention \(variant.attention ?? "")")
+            let tier = try XCTUnwrap(FirebirdDeviceBudget.Tier(rawValue: variant.tierCeiling ?? "extended"),
+                                     "Unknown tier \(variant.tierCeiling ?? "")")
+            let recipe = try recipe(for: variant)
+            // Reload only when the attention kernel or resolution tier changes.
+            if loaded?.attention != attention || loaded?.tier != tier {
+                loaded = nil
+                let runtime = FirebirdRuntime()
+                try await runtime.load(directory: URL(fileURLWithPath: config.modelPath),
+                    options: FirebirdRuntimeOptions(decodeAttention: attention, tierCeiling: tier,
+                                                    maxOutputTokens: config.maxOutputTokens))
+                loaded = (attention, tier, runtime)
+            }
+            let runtime = try XCTUnwrap(loaded?.runtime)
+            for sample in config.samples {
+                let imageURL = base.appendingPathComponent(sample.image)
+                let stem = imageURL.deletingPathExtension().lastPathComponent + "-" + variant.name
+                let reference = try sample.reference.map {
+                    try String(contentsOf: base.appendingPathComponent($0), encoding: .utf8)
                 }
+                var output = ""
+                var report: SampleReport
+                do {
+                    let result = try await runtime.reconstruct(imageData: Data(contentsOf: imageURL), recipe: recipe)
+                    output = result.markdown
+                    report = SampleReport(image: sample.image, variant: variant.name, completed: true, failure: nil,
+                        characterErrorRate: reference.map { TranscriptionMetrics.characterErrorRate(prediction: output, reference: $0) },
+                        metrics: result.metrics)
+                } catch FirebirdRuntimeError.incomplete(let reason, let partial) {
+                    output = partial
+                    report = SampleReport(image: sample.image, variant: variant.name, completed: false,
+                        failure: reason.rawValue, characterErrorRate: nil, metrics: nil)
+                }
+                try output.write(to: destination.appendingPathComponent(stem + ".md"), atomically: true, encoding: .utf8)
+                reports.append(report)
             }
         }
         let encoder = JSONEncoder()

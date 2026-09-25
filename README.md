@@ -105,7 +105,7 @@ python3 Tools/download_firebird_model.py
 ```
 
 Then run `ReconstructionTests` with `FIREBIRD_MODEL_DIR`, `FIREBIRD_TEST_IMAGE` and `FIREBIRD_EXPECTED_LATEX` set to a local model folder, a handwritten image and a known formula fragment.
-For a dataset evaluation, describe samples and optional reference transcriptions in the git-ignored `work/Evaluation/config.json` (format documented above `testLocalEvaluation`); the test writes each transcription plus a `report.json` with character error rate, time to first text, decode tokens per second, peak MLX memory and retry count for every attention mode listed. The application uses its own encrypted streaming installer; the developer cache is not the app storage format.
+For a dataset evaluation, describe samples and optional reference transcriptions in the git-ignored `work/Evaluation/config.json` (format documented above `testLocalEvaluation`); each named variant sets the attention kernel, prompt, decoding and resolution tier, and the test writes each transcription plus a `report.json` with character error rate, time to first text, decode tokens per second, peak MLX memory and retry count. Run it in Release (`-configuration Release ENABLE_TESTABILITY=YES`); Debug MLX builds are several times slower. The application uses its own encrypted streaming installer; the developer cache is not the app storage format.
 
 Remaining acceptance includes: a first install on Wi-Fi, an offline process restart on iPhone 17 Pro, known handwritten-math samples, checking cloud traffic is absent before consent, and inspecting the app container for encrypted persistent content.
 

@@ -1,6 +1,6 @@
 # Vision Notes
 
-Vision Notes scans, recognizes, searches and exports notes on iOS. Ordinary Library OCR uses Apple Vision. Academic reconstruction now routes to **Firebird**, the application's local inference module using **PaddleOCR-VL-1.5, 4-bit** (it replaced Qwen3-VL-2B-Instruct on 2026-09-25; see Decoding). Firebird is not a separately trained model. Mistral OCR and SiliconFlow's Qwen3-VL-32B remain optional cloud fallbacks after explicit confirmation.
+Vision Notes scans, recognizes, searches and exports notes on iOS. Ordinary Library OCR uses Apple Vision. Academic reconstruction now routes to **Firebird**, the application's local inference module using **GLM-OCR, 4-bit** (after Qwen3-VL-2B-Instruct and PaddleOCR-VL-1.5 on 2026-09-25; see Decoding). Firebird is not a separately trained model. Mistral OCR and SiliconFlow's Qwen3-VL-32B remain optional cloud fallbacks after explicit confirmation.
 
 **Validation status:** the app has built and run on iPhone 17 Pro. Mac Metal numerical comparison passes all 18 float32/float16/bfloat16 and cache-boundary cases. The September 23 debugging session found and corrected a multimodal-input bug that dropped the actual image, plus a batched-prompt incompatibility in presence-penalty processing. The 24 Academic simulator tests and 4 UI tests pass in focused reruns, including real WebKit PDF export, persistence, cloud-consent boundaries, OCR editing, import and search. Full physical-device acceptance after these fixes, offline restart, handwriting accuracy, latency and peak memory still require validation. Do not claim a measured speedup or production-grade transcription accuracy.
 
@@ -20,7 +20,7 @@ Vision Notes scans, recognizes, searches and exports notes on iOS. Ordinary Libr
 ## Local model setup and cold start
 
 A development build can bundle the model: put the pinned files in `work/FirebirdModel` (`python3 Tools/download_firebird_model.py`) and the "Bundle Firebird model" build phase copies them into the app, which then loads them in place.
-Otherwise the Academic tab's **On-device model** section downloads about **0.71 GB** from Hugging Face over Wi-Fi through a background URLSession, so the transfer continues while the screen is locked or the app is in the background.
+Otherwise the Academic tab's **On-device model** section downloads about **1.25 GB** from Hugging Face over Wi-Fi through a background URLSession, so the transfer continues while the screen is locked or the app is in the background.
 Only public model files are downloaded; no notes, images or OCR text are sent.
 `VisionNotes/Resources/FirebirdModel.lock.json` pins the model revision and file sizes (its SHA-256 values are used by the developer download tool).
 Downloaded files live unencrypted in `Application Support/VisionNotes/Models/<revision>`, excluded from backup, and load in place; the weights are public, so app-level encryption would protect nothing.
@@ -33,12 +33,14 @@ The app requests `com.apple.developer.kernel.increased-memory-limit`, so the sig
 The per-pixel and fixed memory reserves in that file are uncalibrated estimates; replace them with peaks measured by the evaluation harness on each target device.
 Output that hits the generation limit, or keeps repeating after a retry, is treated as incomplete and kept as a draft, not saved as a successful transcription.
 
-Pinned conversion: [mlx-community/PaddleOCR-VL-1.5-4bit](https://huggingface.co/mlx-community/PaddleOCR-VL-1.5-4bit/tree/3404726b40ac30b6e4e3d37c504e3f96c9c6c984), Apache-2.0. The former Qwen3-VL-2B-Instruct pin is kept in `VisionNotes/Resources/QwenVLModel.lock.json` (`python3 Tools/download_firebird_model.py --model qwen3-vl`) for comparisons. The model weights are downloaded, not committed to this repository.
+Pinned conversion: [mlx-community/GLM-OCR-4bit](https://huggingface.co/mlx-community/GLM-OCR-4bit/tree/97f587506984cc92fa69b2694b4128e53db6b081), MIT. The former pins are kept for comparisons: `PaddleOCRVLModel.lock.json` (Apache-2.0, `--model paddleocr-vl`) and `QwenVLModel.lock.json` (Apache-2.0, `--model qwen3-vl`). The model weights are downloaded, not committed to this repository.
 
 ## Decoding
 
-The app uses PaddleOCR-VL's plain OCR task (`FirebirdRecipe.paddleText`, prompt `OCR:`); `paddleSpotting` adds line boxes.
-Qwen3-VL-2B was replaced after a dense two-column paper page: it skipped the authors and a whole abstract paragraph, then repeated one section until the context ran out, while PaddleOCR-VL read the full page in 5.7 s on an M4.
+The app uses GLM-OCR's text task (`FirebirdRecipe.glmText`, prompt `Text Recognition:`).
+A dense two-column paper page with three charts decided the model. Qwen3-VL-2B skipped the authors and a whole abstract paragraph, then repeated one section until the context ran out. PaddleOCR-VL-1.5 read the text but, on the phone and in mlx-vlm at 1,048,576 pixels, went on to invent chart labels until the token limit.
+Of eight on-device OCR models run on that page with mlx-vlm (`Evaluation/bench_vlm.py --fixtures`), GLM-OCR had character error 0.008 and loads in the runtime (vendored `Vendor/GlmOcr.swift`). In Swift on the M4 it scored 0.011 on the paper page, 0.079 on math, 0.014 on the screenshot and 0.082 on handwriting, where it drops the large title line (PaddleOCR-VL: 0.016). Peak memory is about 2.1 GB.
+PaddleOCR-VL's recipes (`paddleText`, `paddleSpotting`, with line boxes) remain for comparisons.
 The notes below on `qwenvl markdown` apply to the retained Qwen recipe, `academicTranscription`.
 
 The prompt is Qwen3-VL's trained document-parsing instruction, `qwenvl markdown`; a long custom instruction made the model emit a whole LaTeX document and raised character error rate on the math fixture from 0.07 to 0.45.

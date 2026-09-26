@@ -198,7 +198,7 @@ struct MathNotesView: View {
         } header: {
             Text("On-device model")
         } footer: {
-            Text("PaddleOCR-VL-1.5 (4-bit). The download continues while the screen is locked or the app is in the background. Only public model files are downloaded; no pages are uploaded.")
+            Text("GLM-OCR (4-bit). The download continues while the screen is locked or the app is in the background. Only public model files are downloaded; no pages are uploaded.")
         }
     }
 

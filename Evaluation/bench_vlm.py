@@ -331,7 +331,10 @@ def prepared_image(path, max_pixels):
     return image
 
 
-def run(name, preset, max_tokens, out):
+def run(name, preset, max_tokens, out, fixtures=FIXTURES, max_pixels=None):
+    if max_pixels:
+        preset = Preset(**{**preset.__dict__, "max_pixels": max_pixels})
+        name = f"{name}@{max_pixels}"
     from mlx_vlm import load, stream_generate
     from mlx_vlm.prompt_utils import apply_chat_template
 
@@ -349,7 +352,7 @@ def run(name, preset, max_tokens, out):
                              max_tokens=2, temperature=0.0, **preset.kwargs):
         pass
     results = []
-    for image_name, reference_name in FIXTURES:
+    for image_name, reference_name in fixtures:
         image_path = EVALUATION / image_name
         reference = (EVALUATION / reference_name).read_text()
         lines_path = image_path.with_suffix(".lines.json")
@@ -393,17 +396,23 @@ def main():
     parser.add_argument("--models", nargs="+", default=list(PRESETS), choices=list(PRESETS))
     parser.add_argument("--max-tokens", type=int, default=4096)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--fixtures", nargs="+", metavar="IMAGE:REFERENCE",
+                        help="image and reference paths (absolute or relative to Evaluation/) instead of the defaults")
+    parser.add_argument("--max-pixels", type=int, nargs="+", default=[None],
+                        help="run each model at these input sizes instead of the preset's")
     args = parser.parse_args()
+    fixtures = [tuple(item.split(":", 1)) for item in args.fixtures] if args.fixtures else FIXTURES
     args.out.mkdir(parents=True, exist_ok=True)
     report = args.out / "report.jsonl"
     for name in args.models:
-        with report.open("a") as handle:
-            try:
-                for row in run(name, PRESETS[name], args.max_tokens, args.out):
-                    handle.write(json.dumps(row) + "\n")
-            except Exception:
-                traceback.print_exc()
-                handle.write(json.dumps({"model": name, "error": traceback.format_exc(limit=1)}) + "\n")
+        for max_pixels in args.max_pixels:
+            with report.open("a") as handle:
+                try:
+                    for row in run(name, PRESETS[name], args.max_tokens, args.out, fixtures, max_pixels):
+                        handle.write(json.dumps(row) + "\n")
+                except Exception:
+                    traceback.print_exc()
+                    handle.write(json.dumps({"model": name, "error": traceback.format_exc(limit=1)}) + "\n")
 
 
 if __name__ == "__main__":

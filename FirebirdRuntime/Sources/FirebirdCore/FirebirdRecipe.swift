@@ -112,6 +112,13 @@ extension FirebirdRecipe {
     public static let paddleText = FirebirdRecipe(
         version: "paddle-text-1", prompt: "OCR:",
         attempts: [FirebirdDecoding(noRepeatNGram: .reference)])
+
+    /// GLM-OCR's trained text task. On a dense paper page with charts it read
+    /// only the text, where PaddleOCR-VL at the same resolution invented chart
+    /// labels until the token limit (mlx-vlm, M4).
+    public static let glmText = FirebirdRecipe(
+        version: "glm-text-1", prompt: "Text Recognition:",
+        attempts: [FirebirdDecoding(noRepeatNGram: .reference)])
 }
 
 /// Identity of a pinned model plus the recipe applied to it. Page checkpoints

@@ -14,13 +14,13 @@ struct FirebirdCompletion: Sendable {
     let modelIdentifier: String
 }
 
-/// Real image-conditioned generation using the pinned PaddleOCR-VL checkpoint.
-/// On a dense two-column paper page Qwen3-VL-2B skipped whole paragraphs and
-/// looped over one section; PaddleOCR-VL read the page in 5.7 s (M4) and was
-/// as accurate or better on the math, screenshot and handwriting fixtures.
+/// Real image-conditioned generation using the pinned GLM-OCR checkpoint.
+/// On a dense paper page with charts, Qwen3-VL-2B skipped paragraphs and looped
+/// over one section, and PaddleOCR-VL invented chart labels until the token
+/// limit on the phone; GLM-OCR read only the page text (character error 0.011).
 struct FirebirdLocalModel: Sendable {
-    static let modelName = "PaddleOCR-VL-1.5 (4-bit, local Firebird)"
-    static let recipe = FirebirdRecipe.paddleText
+    static let modelName = "GLM-OCR (4-bit, local Firebird)"
+    static let recipe = FirebirdRecipe.glmText
 
     /// Derived from the bundled lock and the recipe, so a new revision or
     /// decoding change invalidates page checkpoints without editing call sites.

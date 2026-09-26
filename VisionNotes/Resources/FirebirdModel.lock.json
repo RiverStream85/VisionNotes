@@ -1,36 +1,46 @@
 {
-  "model": "mlx-community/PaddleOCR-VL-1.5-4bit",
-  "revision": "3404726b40ac30b6e4e3d37c504e3f96c9c6c984",
+  "model": "mlx-community/GLM-OCR-4bit",
+  "revision": "97f587506984cc92fa69b2694b4128e53db6b081",
   "assets": [
     {
       "name": "config.json",
-      "bytes": 2483,
-      "sha256": "e17df4c3cf9ddad33a8449d65d0da911b4187d4ba565a421e4faecc8d1e488c7"
-    },
-    {
-      "name": "tokenizer.json",
-      "bytes": 11189060,
-      "sha256": "c8a215a59183d0d0781adc33bacd3ce6162716f7fd568fb30234a74d69803a7d"
-    },
-    {
-      "name": "tokenizer_config.json",
-      "bytes": 876,
-      "sha256": "dbdaa32276c60eb38b7986ba7c63fa5b66def3a06141ff2184ea9923dacea436"
-    },
-    {
-      "name": "preprocessor_config.json",
-      "bytes": 641,
-      "sha256": "111872ab1e8bb7fd040ac5087bfced7ab8f011f02139b088cba294964c3b1d0e"
+      "bytes": 2080,
+      "sha256": "c5c23ce928b8ccd72468c36de821a4132091e7bfc8dc3011e4349acafa63b72a"
     },
     {
       "name": "generation_config.json",
-      "bytes": 133,
-      "sha256": "a6701d78ab3b4d972307cdec3b69d4c13f46e0d5140514f50ab7d84259324b94"
+      "bytes": 165,
+      "sha256": "4e2a3412f65b2a21d315d928986c55723d3e60dfb92c3982a5b9fd56835b0aa5"
+    },
+    {
+      "name": "tokenizer.json",
+      "bytes": 6838609,
+      "sha256": "aa0fd058c73a5718bb191f6672dc16d122ee0147b20c123d1726514298f9968a"
+    },
+    {
+      "name": "tokenizer_config.json",
+      "bytes": 1066,
+      "sha256": "7a76fcb27abbc2cb0249d81884fef972b2c27194e3e13db54baae50f58f141fb"
+    },
+    {
+      "name": "chat_template.jinja",
+      "bytes": 4606,
+      "sha256": "062e7ee4cc8defa88a5938b5d456dc60366ffd80647f918946ee747bf09ddc7c"
+    },
+    {
+      "name": "preprocessor_config.json",
+      "bytes": 367,
+      "sha256": "02cc50c36240882ae35e8cd4077a25a379664108185d728d261cb785aefeccff"
+    },
+    {
+      "name": "processor_config.json",
+      "bytes": 597,
+      "sha256": "19dafea5bd6415c50e2da43a31583dab39f9496673260ad33d9fa6c638a1d077"
     },
     {
       "name": "model.safetensors",
-      "bytes": 703562711,
-      "sha256": "f9a45393e2ffe6cbb412c25c82704fbb081e952c4c4517fa01e8a750010d1267"
+      "bytes": 1247191941,
+      "sha256": "089e0339fcbc0fbf2225c3bd1cd94c6b4d49fdb3b1adfbb35ea22eb60b2afc95"
     }
   ]
 }

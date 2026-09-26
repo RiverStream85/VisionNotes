@@ -1,6 +1,6 @@
 import Foundation
 
-/// The pinned public PaddleOCR-VL checkpoint (Apache-2.0 weights, never note content).
+/// The pinned public GLM-OCR checkpoint (MIT weights, never note content).
 /// A development build may bundle it; otherwise a background download stores it
 /// once in Application Support. Either way the files load in place.
 enum FirebirdModelAssets {

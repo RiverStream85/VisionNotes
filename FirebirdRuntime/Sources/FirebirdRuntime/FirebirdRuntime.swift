@@ -86,7 +86,7 @@ public actor FirebirdRuntime {
     /// The limits chosen for this device at load time.
     public func deviceBudget() -> FirebirdDeviceBudget? { budget }
 
-    /// Loads a Qwen3-VL (`qwen3_vl`) or PaddleOCR-VL (`paddleocr_vl`) checkpoint.
+    /// Loads a Qwen3-VL (`qwen3_vl`), PaddleOCR-VL (`paddleocr_vl`) or GLM-OCR (`glm_ocr`) checkpoint.
     public func load(directory: URL, options: FirebirdRuntimeOptions = .init()) async throws {
         guard container == nil else { return }
         let data = try Data(contentsOf: directory.appendingPathComponent("config.json"))
@@ -102,6 +102,10 @@ public actor FirebirdRuntime {
             let config = try JSONDecoder().decode(PaddleOCRVLConfiguration.self, from: data)
             footprint = FirebirdModelFootprint(weightBytes: try Self.weightBytes(in: directory),
                 layers: config.numHiddenLayers, kvHeads: config.numKeyValueHeads, headDim: config.headDim)
+        case "glm_ocr":
+            let text = try JSONDecoder().decode(GlmOcrConfiguration.self, from: data).textConfiguration
+            footprint = FirebirdModelFootprint(weightBytes: try Self.weightBytes(in: directory),
+                layers: text.hiddenLayers, kvHeads: text.kvHeads, headDim: text.headDim)
         default:
             throw FirebirdRuntimeError.unsupportedConfiguration
         }
@@ -132,6 +136,11 @@ public actor FirebirdRuntime {
             processorConfig.maxPixels = min(processorConfig.maxPixels, budget.maxPixels)
             model = PaddleOCRVL(config)
             processor = PaddleOCRVLProcessor(processorConfig, tokenizer: tokenizer, imageTokenId: config.imageTokenId)
+            decodeAttention = .mlx
+        } else if modelType == "glm_ocr" {
+            model = GlmOcr(try JSONDecoder().decode(GlmOcrConfiguration.self, from: data))
+            processor = GlmOcrProcessor(try Self.glmProcessorConfiguration(in: directory, maxPixels: budget.maxPixels),
+                                        tokenizer: tokenizer)
             decodeAttention = .mlx
         } else {
             model = Qwen3VL(try JSONDecoder().decode(Qwen3VLConfiguration.self, from: data))
@@ -360,6 +369,23 @@ public actor FirebirdRuntime {
             object["min_pixels"] = maxPixels
         }
         return try JSONDecoder().decode(Qwen3VLProcessorConfiguration.self,
+            from: JSONSerialization.data(withJSONObject: object))
+    }
+
+    /// GLM-OCR's processor reads its pixel range from `size`, in pixels, not edges.
+    static func glmProcessorConfiguration(in directory: URL, maxPixels: Int) throws -> GlmOcrProcessorConfiguration {
+        let data = try Data(contentsOf: directory.appendingPathComponent("preprocessor_config.json"))
+        guard var object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              var size = object["size"] as? [String: Any] else {
+            throw FirebirdRuntimeError.unsupportedConfiguration
+        }
+        let configured = (size["longest_edge"] as? NSNumber)?.intValue ?? Int.max
+        size["longest_edge"] = min(configured, maxPixels)
+        if let minimum = (size["shortest_edge"] as? NSNumber)?.intValue, minimum > maxPixels {
+            size["shortest_edge"] = maxPixels
+        }
+        object["size"] = size
+        return try JSONDecoder().decode(GlmOcrProcessorConfiguration.self,
             from: JSONSerialization.data(withJSONObject: object))
     }
 
